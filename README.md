@@ -16,7 +16,8 @@ For example, to run fedavg-erm with centralized learning on iwildcam, run
 python main.py --config_file ./config/ERM/iwildcam/centralized.json
 ```
 
-## Implement your own methods
+<!-- ## Implement your own methods
 ### Client
 
 ### Server
+ -->
