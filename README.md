@@ -3,7 +3,6 @@
 This is the git repo of [Benchmarking Algorithms for Domain Generalization in Federated Learning](https://openreview.net/forum?id=IsCg7qoy8i9).
 
 ## Environment preparation
-Run
 ```
 conda create  --name <env> --file requirements.txt
 ```
@@ -19,6 +18,5 @@ python main.py --config_file ./config/ERM/iwildcam/centralized.json
 
 ## Implement your own methods
 ### Client
-
 
 ### Server
