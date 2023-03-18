@@ -618,3 +618,89 @@ class FedADG(ERM):
     @property
     def loader_type(self):
         return 'standard'
+
+
+class ScaffoldClient(ERM):
+    def setup_model(self, featurizer, classifier):
+        super().setup_model(featurizer, classifier)
+        self.c_local = None
+
+    def fit(self):
+        """Update local model using local dataset."""
+        global_model = ParamDict(self.model.state_dict())
+        self.init_train()
+        lr = self.optimizer.param_groups[0]['lr']
+        for e in range(self.local_epochs):
+            # for batch in tqdm(self.dataloader):
+            for batch in tqdm(self.dataloader):
+                results = self.process_batch(batch)
+                self.step(results)
+        
+        self.end_train()
+        self.model.to('cpu')
+        local_model = ParamDict(self.model.state_dict())
+        if self.c_local is None:
+            self.c_local = (global_model - local_model) / (self.local_epochs * lr)
+        else:
+            self.c_local = self.c_local - self.c_global + (global_model - local_model) / (self.local_epochs * lr)
+    
+    def step(self, results):
+        # print(results['y_true'])
+        # objective = eval(self.criterion)()(results['y_pred'], results['y_true'])
+        objective = self.ds_bundle.loss.compute(results['y_pred'], results['y_true'], return_dict=False).mean()
+        if objective.grad_fn is None:
+            pass
+        try:
+            objective.backward()
+        except RuntimeError:
+            print(objective)
+            print(objective.grad_fn)
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        with torch.no_grad():
+            param_dict = ParamDict(copy.deepcopy(self.model).to('cpu').state_dict())
+            if self.c_local is not None:
+                param_dict = param_dict - self.optimizer.param_groups[0]['lr'] * (self.c_global - self.c_local)
+            self.model.load_state_dict(copy.deepcopy(param_dict))
+
+
+class FedProx(ERM):
+    def __init__(self, seed, exp_id, client_id, device, dataset, ds_bundle, client_config):
+        super().__init__(seed, exp_id, client_id, device, dataset, ds_bundle, client_config)
+        self.mu = self.client_config['mu']
+    def prox(self):
+        proximal_term = 0.0
+        for w, w_t in zip(self.model.parameters(), self.global_model.parameters()):
+            proximal_term += (w - w_t).norm(2)
+        return proximal_term
+    
+    def init_train(self):
+        self.model.train()
+        self.model.to(self.device)
+        self.global_model = copy.deepcopy(self.model)
+        self.optimizer = eval(self.optimizer_name)(self.model.parameters(), **self.optim_config)
+        self.scheduler = eval(self.scheduler_name)(self.optimizer, **self.scheduler_config)
+        if self.saved_optimizer:
+            self.optimizer.load_state_dict(torch.load(self.opt_dict_path))
+            self.scheduler.load_state_dict(torch.load(self.sch_dict_path))
+    
+    def end_train(self):
+        self.optimizer.zero_grad(set_to_none=True)
+        self.model.to("cpu")
+        torch.save(self.optimizer.state_dict(), self.opt_dict_path)
+        torch.save(self.scheduler.state_dict(), self.sch_dict_path)
+        del self.scheduler, self.optimizer, self.global_model
+    
+    def step(self, results):
+        # print(results['y_true'])
+        # objective = eval(self.criterion)()(results['y_pred'], results['y_true'])
+        objective = self.ds_bundle.loss.compute(results['y_pred'], results['y_true'], return_dict=False).mean() + self.mu / 2 * self.prox()
+        if objective.grad_fn is None:
+            pass
+        try:
+            objective.backward()
+        except RuntimeError:
+            print(objective)
+            print(objective.grad_fn)
+        self.optimizer.step()
+        self.optimizer.zero_grad()
