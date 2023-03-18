@@ -319,3 +319,61 @@ class FedADG(FedAvg):
         message = f"[Round: {str(self._round).zfill(3)}] ...updated weights of {len(sampled_client_indices)} clients are successfully averaged!"
         logging.debug(message)
         del message
+
+
+class ScaffoldServer(FedAvg):
+    def __init__(self, seed, exp_id, device, ds_bundle, server_config):
+        super().__init__(seed, exp_id, device, ds_bundle, server_config)
+        self.c = None
+
+    def transmit_model(self, sampled_client_indices=None):
+        """
+            Description: Send the updated global model to selected/all clients.
+            This method could be overriden by the derived class if one algorithm requires to send things other than model parameters.
+        """
+        if sampled_client_indices is None:
+            # send the global model to all clients before the very first and after the last federated round
+            for client in tqdm(self.clients, leave=False):
+            # for client in self.clients:
+                client.update_model(self.model.state_dict())
+                client.c_global = copy.deepcopy(self.c)
+
+            message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to all {str(self.num_clients)} clients!"
+            logging.debug(message)
+            del message
+        else:
+            # send the global model to selected clients
+            for idx in tqdm(sampled_client_indices, leave=False):
+            # for idx in sampled_client_indices:
+                self.clients[idx].update_model(self.model.state_dict())
+                self.clients[idx].c_global = copy.deepcopy(self.c)
+            message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to {str(len(sampled_client_indices))} selected clients!"
+            logging.debug(message)
+            del message
+    
+    def aggregate(self, sampled_client_indices, coefficients):
+        print(len(sampled_client_indices))
+        """Average the updated and transmitted parameters from each selected client."""
+        message = f"[Round: {str(self._round).zfill(3)}] Aggregate updated weights of {len(sampled_client_indices)} clients...!"
+        logging.debug(message)
+        del message
+
+        averaged_weights = OrderedDict()
+        for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
+            local_weights = self.clients[idx].model.state_dict()
+            if it == 0:
+                c_local = self.clients[idx].c_local
+            else:
+                c_local += self.clients[idx].c_local
+            for key in self.model.state_dict().keys():
+                if it == 0:
+                    averaged_weights[key] = coefficients[it] * local_weights[key]
+    
+                else:
+                    averaged_weights[key] += coefficients[it] * local_weights[key]
+        self.c = c_local / len(sampled_client_indices)
+        self.model.load_state_dict(averaged_weights)
+        message = f"[Round: {str(self._round).zfill(3)}] ...updated weights of {len(sampled_client_indices)} clients are successfully averaged!"
+        logging.debug(message)
+        del message
+
