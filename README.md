@@ -6,6 +6,18 @@ This is the git repo of [Benchmarking Algorithms for Domain Generalization in Fe
 ```
 conda create  --name <env> --file requirements.txt
 ```
+
+## Prepare Datasets
+For PACS and FEMNIST dataset, please put 
+```
+resources/femnist_v1.0/* 
+```
+and 
+```
+resources/pacs_v1.0/* 
+```
+into your dataset directory.
+
 ## Run Experiments
 To run the experiments, simply prepare your config file $config_path, and run
 ```
@@ -16,8 +28,3 @@ For example, to run fedavg-erm with centralized learning on iwildcam, run
 python main.py --config_file ./config/ERM/iwildcam/centralized.json
 ```
 
-<!-- ## Implement your own methods
-### Client
-
-### Server
- -->
