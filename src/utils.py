@@ -95,6 +95,24 @@ class ParamDict(OrderedDict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, *kwargs)
 
+    def sign(self):
+        return ParamDict({k: torch.sign(v) for k, v in self.items()})
+    
+    def ge(self, number):
+        return ParamDict({k: torch.ge(v, number) for k, v in self.items()})
+    
+    def le(self, number):
+        return ParamDict({k: torch.le(v, number) for k, v in self.items()})
+    
+    def gt(self, number):
+        return ParamDict({k: torch.gt(v, number) for k, v in self.items()})
+    
+    def lt(self, number):
+        return ParamDict({k: torch.lt(v, number) for k, v in self.items()})
+    
+    def abs(self):
+         return ParamDict({k: torch.abs(v) for k, v in self.items()})
+
     def _prototype(self, other, op):
         if isinstance(other, Number):
             return ParamDict({k: op(v, other) for k, v in self.items()})
@@ -123,8 +141,9 @@ class ParamDict(OrderedDict):
     def __truediv__(self, other):
         return self._prototype(other, operator.truediv)
 
+    def to(self, device):
+        return ParamDict({k: v.to(device) for k, v in self.items()})
 
-    
 # class TransformSubset(Subset):
 #     def __init__(self, dataset, indices, transform: Optional[Callable] = None, target_transform: Optional[Callable] = None):
 #         self.transform = transform
@@ -183,24 +202,6 @@ class ParamDict(OrderedDict):
 #                 batches.append(batch)
 #             return batches
 
-
-# label smoothing regularization
-class LabelSmoothingLoss(nn.Module):
-    def __init__(self, label_smoothing, lbl_set_size, dim=1):
-        super(LabelSmoothingLoss, self).__init__()
-        self.confidence = 1.0 - label_smoothing
-        self.smoothing = label_smoothing
-        self.cls = lbl_set_size
-        self.dim = dim
-
-    def forward(self, pred, target):
-        pred = pred.log_softmax(dim=self.dim)
-        with torch.no_grad():
-            true_dist = torch.zeros_like(pred)
-            true_dist.fill_(self.smoothing / (self.cls - 1))
-            true_dist.scatter_(1, target.data.unsqueeze(1),self.confidence)
-        res = torch.sum(-true_dist * pred, dim=self.dim)
-        return torch.mean(res)
 
 ## Copied from https://github.com/ildoonet/pytorch-gradual-warmup-lr/blob/master/warmup_scheduler/scheduler.py
 from torch.optim.lr_scheduler import _LRScheduler

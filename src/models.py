@@ -4,9 +4,11 @@ import torch.nn.functional as F
 import torchvision.models
 from transformers import GPT2LMHeadModel, GPT2Model
 from transformers import GPT2Tokenizer
+from transformers import BertForSequenceClassification, BertModel
 import copy
 from collections import OrderedDict
 from torch.nn import init
+from transformers import DistilBertForSequenceClassification, DistilBertModel
 
 
 def remove_batch_norm_from_resnet(model):
@@ -41,13 +43,36 @@ class Identity(nn.Module):
     def forward(self, x):
         return x
 
+class CNN(nn.Module):
+    def __init__(self, input_shape, probabilistic=False):
+        super(CNN,self).__init__()
+        self.n_outputs = 2048
+        self.probabilistic = probabilistic
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels=input_shape[0],out_channels=16,kernel_size=5,padding=2),  # in_channels, out_channels, kernel_size
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2,stride=2),  # kernel_size, stride
+            nn.Conv2d(in_channels=16,out_channels=64,kernel_size=5,padding=2),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2,stride=2)
+        )
+        if self.probabilistic:
+            self.fc = nn.Linear(in_features=7*7*64,out_features=self.n_outputs * 2)
+        else:
+            self.fc = nn.Linear(in_features=7*7*64,out_features=self.n_outputs)
+    def forward(self,x):
+        feature=self.fc(self.conv(x).view(x.shape[0], -1))
+        return feature
 
 class ResNet(torch.nn.Module):
     """ResNet with the softmax chopped off and the batchnorm frozen"""
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, feature_dimension=2048, probabilistic=False):
         super(ResNet, self).__init__()
+        self.probabilistic = probabilistic
+        # self.network = torchvision.models.resnet18(pretrained=True)
+        # self.n_outputs = 512
         self.network = torchvision.models.resnet50(pretrained=True)
-        self.n_outputs = 2048
+        self.n_outputs = feature_dimension
 
         # self.network = remove_batch_norm_from_resnet(self.network)
 
@@ -62,13 +87,11 @@ class ResNet(torch.nn.Module):
 
             for i in range(nc):
                 self.network.conv1.weight.data[:, i, :, :] = tmp[:, i % 3, :, :]
-
-        # save memory
-        del self.network.fc
-        self.network.fc = Identity()
-
-        self.freeze_bn()
         self.dropout = nn.Dropout(0)
+        if probabilistic:
+            self.network.fc = nn.Linear(self.network.fc.in_features,self.n_outputs*2)
+        else:
+            self.network.fc = nn.Linear(self.network.fc.in_features,self.n_outputs)
 
     def forward(self, x):
         """Encode x into a feature vector of size n_outputs."""
@@ -99,13 +122,26 @@ class GPT2LMHeadLogit(GPT2LMHeadModel):
 
 
 class GPT2Featurizer(GPT2Model):
-    def __init__(self, config):
+    def __init__(self, config, probabilistic=False):
+        self.probabilistic=probabilistic
         super().__init__(config)
-        self.d_out = config.n_embd
+
+    def init_probablistic(self):
+        d = self.embed_dim
+        self.lm = nn.Linear(in_features=d, out_features=2*d)
+        weight_init = torch.cat((torch.eye(d),torch.eye(d)), dim=0)
+        weight_init = nn.parameter.Parameter(weight_init, requires_grad=True)
+        self.lm.weight=weight_init            
+
+    @property
+    def n_outputs(self):
+        return self.embed_dim
 
     def __call__(self, x):
         outputs = super().__call__(x)
         hidden_states = outputs[0] #[batch_size, seqlen, n_embd]
+        if self.probabilistic:
+            hidden_states = self.lm(hidden_states)
         return hidden_states
 
 
@@ -122,17 +158,17 @@ class GPT2FeaturizerLMHeadLogit(GPT2LMHeadModel):
 
 
 class GeneDistrNet(nn.Module):
-    def __init__(self, num_labels, input_size=1024, hidden_size=2048):
+    def __init__(self, num_labels, input_size, hidden_size=4096):
         super(GeneDistrNet,self).__init__()
         self.num_labels = num_labels
+        self.input_size = input_size
         self.latent_size = 4096
-        self.genedistri = nn.Sequential(OrderedDict([
-            ("fc1", nn.Linear(input_size + self.num_labels, self.latent_size)),
-            ("relu1", nn.LeakyReLU()),
-
-            ("fc2", nn.Linear(self.latent_size, hidden_size)),
-            ("relu2", nn.ReLU()),
-        ]))
+        self.genedistri = nn.Sequential(
+            nn.Linear(input_size + self.num_labels, self.latent_size),
+            nn.LeakyReLU(),
+            nn.Linear(self.latent_size, hidden_size),
+            nn.ReLU(),
+        )
         self.initial_params()
 
     def initial_params(self):
@@ -167,12 +203,92 @@ class Discriminator(nn.Module):
         logit = self.features_pro(feature)
         return logit
 
-def code_gpt_py():
+def code_gpt_py(probabilistic=False):
     name = 'microsoft/CodeGPT-small-py'
     tokenizer = GPT2Tokenizer.from_pretrained(name)
     model = GPT2FeaturizerLMHeadLogit.from_pretrained(name)
     model.resize_token_embeddings(len(tokenizer))
     featurizer = model.transformer
+    featurizer.probabilistic = probabilistic
     classifier = model.lm_head
     model = (featurizer, classifier)
     return model
+
+
+def Classifier(in_features, out_features, is_nonlinear=False):
+    if is_nonlinear:
+        return torch.nn.Sequential(
+            torch.nn.Linear(in_features, in_features // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(in_features // 2, in_features // 4),
+            torch.nn.ReLU(),
+            torch.nn.Linear(in_features // 4, out_features))
+    else:
+        return torch.nn.Linear(in_features, out_features)
+
+
+class BertClassifier(BertForSequenceClassification):
+    def __init__(self, config):
+        super().__init__(config)
+        self.d_out = config.num_labels
+        
+    def __call__(self, x):
+        input_ids = x[:, :, 0]
+        attention_mask = x[:, :, 1]
+        token_type_ids = x[:, :, 2]
+        outputs = super().__call__(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids
+        )[0] 
+        return outputs
+
+class BertFeaturizer(BertModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.d_out = config.hidden_size
+
+    def __call__(self, x):
+        input_ids = x[:, :, 0]
+        attention_mask = x[:, :, 1]
+        token_type_ids = x[:, :, 2]
+        outputs = super().__call__(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids
+        )[1] # get pooled output
+        return outputs
+
+
+class DistilBertFeaturizer(DistilBertModel):
+    def __init__(self, config, probabilistic=False):
+        super().__init__(config)
+        self.probabilistic = probabilistic
+    
+    @property
+    def d_out(self):
+        return 768
+
+    @property
+    def n_outputs(self):
+        return self.d_out
+
+    def init_probablistic(self):
+        d = self.d_out
+        self.probabilistic = True
+        self.lm = nn.Linear(in_features=d, out_features=2*d)
+        weight_init = torch.cat((torch.eye(d),torch.eye(d)), dim=0)
+        weight_init = nn.parameter.Parameter(weight_init, requires_grad=True)
+        self.lm.weight=weight_init
+    
+    def __call__(self, x):
+        input_ids = x[:, :, 0]
+        attention_mask = x[:, :, 1]
+        hidden_state = super().__call__(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )[0]
+        pooled_output = hidden_state[:, 0]
+        if self.probabilistic:
+            pooled_output =self.lm(pooled_output)
+        return pooled_output

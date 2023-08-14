@@ -158,3 +158,9 @@ class NonIIDSplitter():
         for i, dt in enumerate(dataset_per_shards):
             assert np.array_equal(np.array(np.bincount(dt.metadata_array[:,domain_field], minlength=num_domains)), np.array(final_examples_per_shards[i]))
         return dataset_per_shards
+
+
+def concat_subset(subset: WILDSSubset, other: WILDSSubset):
+    assert subset.dataset == other.dataset
+    new_idx = subset.indices.tolist() + other.indices
+    return WILDSSubset(subset.dataset, new_idx, transform=subset.transform)

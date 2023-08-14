@@ -7,12 +7,14 @@ import torch
 import torch.cuda
 from src.server import *
 from src.client import *
-from src.datasets import FourierIwildCam
+import src.datasets as my_datasets
 # from dataclasses import dataclass
 from src.splitter import *
 from src.utils import *
+from src.dataset_bundle import *
 from wilds.common.data_loaders import get_eval_loader
 from wilds import get_dataset
+from src.models import ResNet
 
 """
 The main file function:
@@ -65,34 +67,70 @@ def main(args):
     num_shards = data_config['num_shards']
     iid = data_config['iid']
     root_dir = data_config["data_path"]
-    dataset = get_dataset(dataset=global_config["dataset_name"].lower(), root_dir=root_dir, download=True)
+    if global_config['dataset_name'].lower() == 'pacs':
+        dataset = my_datasets.PACS(version='1.0', root_dir=root_dir, download=True)
+    elif global_config['dataset_name'].lower() == 'officehome':
+        dataset = my_datasets.OfficeHome(version='1.0', root_dir=root_dir, download=True, split_scheme=data_config["split_scheme"])
+    elif global_config['dataset_name'].lower() == 'femnist':
+        dataset = my_datasets.FEMNIST(version='1.0', root_dir=root_dir, download=True)
+    else:
+        dataset = get_dataset(dataset=global_config["dataset_name"].lower(), root_dir=root_dir, download=True)
     # if server_config['algorithm'] == "FedDG":
     #     # make it easier to hash fourier transformation
     #     indices = torch.arange(len(dataset)).reshape(-1,1)
     #     new_metadata_array = torch.cat((dataset.metadata_array, indices), dim=1)
     #     dataset._metadata_array = new_metadata_array
-    ds_bundle = eval(global_config["dataset_name"])(dataset)
-    in_test_dataset = dataset.get_subset('id_test', transform = ds_bundle.test_transform)
+    if client_config['algorithm'] == "FedSR":
+        ds_bundle = eval(global_config["dataset_name"])(dataset, global_config["feature_dimension"], probabilistic=True)
+    else:
+        if global_config['dataset_name'].lower() == 'py150' or global_config['dataset_name'].lower() == 'civilcomments':
+            ds_bundle = eval(global_config["dataset_name"])(dataset, probabilistic=False)
+        else:
+            ds_bundle = eval(global_config["dataset_name"])(dataset, global_config["feature_dimension"], probabilistic=False)
+    if server_config['algorithm'] == "FedDG":
+        if global_config["dataset_name"].lower() == "iwildcam":
+            dataset = my_datasets.FourierIwildCam(root_dir=root_dir, download=True)
+            total_subset = dataset.get_subset('train', transform=ds_bundle.test_transform)
+        elif global_config["dataset_name"].lower() == "pacs":
+            dataset = my_datasets.FourierPACS(root_dir=root_dir, download=True, split_scheme=data_config["split_scheme"])
+            total_subset = dataset.get_subset('train', transform=ds_bundle.test_transform)
+        else:
+            raise NotImplementedError
+    else:
+        total_subset = dataset.get_subset('train', transform=ds_bundle.train_transform)
+
+    try:
+        in_test_dataset = dataset.get_subset('id_test', transform=ds_bundle.test_transform)
+    except ValueError:
+        in_test_dataset, total_subset = RandomSplitter(ratio=0.2, seed=seed).split(total_subset)
+        in_test_dataset.transform = ds_bundle.test_transform
+        total_subset.transform = ds_bundle.train_transform
+
     lodo_validation_dataset = dataset.get_subset('val', transform = ds_bundle.test_transform)
-    in_validation_dataset = dataset.get_subset('id_val',transform = ds_bundle.test_transform)
+    try:
+        in_validation_dataset = dataset.get_subset('id_val',transform = ds_bundle.test_transform)
+    except ValueError:
+        in_validation_dataset, in_test_dataset = RandomSplitter(ratio=0.5, seed=seed).split(total_subset)
+        in_validation_dataset.transform = ds_bundle.test_transform
+        in_test_dataset.transform = ds_bundle.test_transform
     out_test_dataset = dataset.get_subset('test', transform=ds_bundle.test_transform)
     
     out_test_dataloader = get_eval_loader(loader='standard', dataset=out_test_dataset, batch_size=global_config["batch_size"])
     in_test_dataloader = get_eval_loader(loader='standard', dataset=in_test_dataset, batch_size=global_config["batch_size"])
     lodo_validation_dataloader = get_eval_loader(loader='standard', dataset=lodo_validation_dataset, batch_size=global_config["batch_size"])
     in_validation_dataloader = get_eval_loader(loader='standard', dataset=in_validation_dataset, batch_size=global_config["batch_size"])
-
-    # split
-    if server_config['algorithm'] == "FedDG":
-        if global_config["dataset_name"].lower() == "iwildcam":
-            dataset = FourierIwildCam(root_dir=root_dir, download=True)
-            total_subset = dataset.get_subset('train', transform=ds_bundle.test_transform)
-        else:
-            raise NotImplementedError
-    else:
-        total_subset = dataset.get_subset('train', transform=ds_bundle.train_transform)
+    
     sampler = RandomSampler(total_subset, replacement=True)
     global_dataloader = DataLoader(total_subset, batch_size=global_config["batch_size"], sampler=sampler)
+    # # DS
+    # out_test_dataset, test_train = RandomSplitter(ratio=0.5, seed=seed).split(out_test_dataset)
+    # out_test_dataset.transform = ds_bundle.test_transform
+    # out_test_dataloader = get_eval_loader(loader='standard', dataset=out_test_dataset, batch_size=global_config["batch_size"])
+    # if global_config['cheat']:
+    #     total_subset = concat_subset(total_subset, test_train)
+    # training_datasets = [total_subset]
+    print(len(total_subset), len(in_validation_dataset), len(lodo_validation_dataset), len(in_test_dataset), len(out_test_dataset))
+
     if num_shards == 1:
         training_datasets = [total_subset]
     elif num_shards > 1:
@@ -103,7 +141,7 @@ def main(args):
     # initialize client
     clients = []
     for k in tqdm(range(global_config["num_clients"]), leave=False):
-        client = eval(client_config["algorithm"])(seed, k, device, training_datasets[k], ds_bundle, client_config)
+        client = eval(client_config["algorithm"])(seed, exp_id, k, device, training_datasets[k], ds_bundle, client_config)
         clients.append(client)
     message = f"successfully initialize all clients!"
     logging.info(message)
@@ -112,7 +150,7 @@ def main(args):
     # initialize server (model should be initialized in the server. )
     central_server = eval(server_config["algorithm"])(seed, exp_id, device, ds_bundle, server_config)
     if server_config['algorithm'] == "FedDG":
-        central_server.set_global_dataloader(global_dataloader)
+        central_server.set_amploader(global_dataloader)
     central_server.setup_model(args.resume_file, args.start_epoch)
     central_server.register_clients(clients)
     central_server.register_testloader({
