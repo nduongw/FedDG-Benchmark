@@ -2,12 +2,29 @@
 
 This is the git repo of [Benchmarking Algorithms for Domain Generalization in Federated Learning]([https://openreview.net/forum?id=IsCg7qoy8i9](https://openreview.net/forum?id=EqGjKubKEB)).
 
-## Environment preparation
+## Available methods
+* FedAvg
+* IRM
+* REx
+* Fish
+* MMD
+* DeepCoral
+* GroupDRO
+* FedProx
+* Scaffold
+* FedDG
+* FedADG
+* FedSR
+* FedGMA
+
+# Environment preparation
 ```
 conda create  --name <env> --file requirements.txt
 ```
 
 ## Prepare Datasets
+All datasets derived from [Wilds](https://wilds.stanford.edu/) Datasets. We also implement [femnist](https://leaf.cmu.edu/) and [PACS](https://arxiv.org/abs/2007.01434) datasets.
+
 For PACS and FEMNIST dataset, please put 
 ```
 resources/femnist_v1.0/* 
