@@ -1,2 +1,2 @@
-WANDB_ENTITY = 'inouye-lab'
+WANDB_ENTITY = ''
 WANDB_PROJECT = 'FedDG_Benchmark'
