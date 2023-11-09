@@ -27,23 +27,32 @@ The main file function:
 7. Start the server.
 """
 def main(args):
+    now = datetime.datetime.now()
+    dt_string = now.strftime("%d/%m/%Y-%H:%M:%S")
+    
+    #load hyperparam
     hparam = vars(args)
     config_file = args.config_file
     with open(config_file) as fh:
         config = json.load(fh)
     hparam.update(config)
     wandb_project = WANDB_PROJECT
+    
     # setup WanDB
     wandb.init(project=wandb_project,
                 entity=WANDB_ENTITY,
                 group=hparam['dataset'],
+                name=f"[{dt_string}]|nclient={hparam['num_clients']}-nround={hparam['num_rounds']}-seed={hparam['seed']}",
+                job_type=f"{hparam['server_method']}-{hparam['client_method']}",
                 config=hparam)
     wandb.run.log_code()
+    
     config['id'] = wandb.run.id
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f'Current available device: {device}')
     seed = hparam['seed']
     set_seed(seed)
+    
     data_path = hparam['data_path']
     if not os.path.exists(data_path + "opt_dict/"): os.makedirs(data_path + "opt_dict/")
     if not os.path.exists(data_path + "sch_dict/"): os.makedirs(data_path + "sch_dict/")
@@ -121,13 +130,9 @@ def main(args):
     for k in tqdm(range(hparam["num_clients"]), leave=False):
         client = eval(hparam["client_method"])(k, device, training_datasets[k], ds_bundle, hparam)
         clients.append(client)
-    message = f"successfully initialize all clients!"
-    logging.info(message)
-    del message; gc.collect() 
+    print(f"successfully initialize all clients!")
 
     # initialize server (model should be initialized in the server. )
-    # import pdb
-    # pdb.set_trace()
     central_server = eval(hparam["server_method"])(seed, config['id'], device, ds_bundle, hparam)
     if hparam['client_method'] == "FedDG":
         central_server.set_amploader(global_dataloader)
@@ -141,8 +146,7 @@ def main(args):
     central_server.fit()
     
     # bye!
-    message = "...done all learning process!\n...exit program!"
-    logging.info(message)
+    print("...done all learning process!\n...exit program!")
     time.sleep(3)
     exit()
 

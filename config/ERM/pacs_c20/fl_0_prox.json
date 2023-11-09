@@ -5,7 +5,7 @@
     "seed": 42,
     "data_path": "./data/",
     "dataset": "PACS",
-    "algorithm": "FedAvg",
+    "algorithm": "FedProx",
     "fraction": 0.2,
     "num_rounds": 50,
     "mp": false,

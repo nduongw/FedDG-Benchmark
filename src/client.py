@@ -94,16 +94,16 @@ class ERM(object):
         del self.scheduler, self.optimizer
         if self.device == "cuda": torch.cuda.empty_cache()
 
-    def fit(self):
+    def fit(self, global_round):
         """Update local model using local dataset."""
         self.init_train()
         training_loss = 0.
         for e in range(self.local_epochs):
-            for batch in tqdm(self.dataloader):
+            for batch in self.dataloader:
                 results = self.process_batch(batch)
                 training_loss += self.step(results)
             if self.hparam['wandb']:
-                wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)})
+                wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
             
 
 

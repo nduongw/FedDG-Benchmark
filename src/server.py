@@ -55,9 +55,12 @@ class FedAvg(object):
         # assert self._round == 0
         self.clients = clients
         self.num_clients = len(self.clients)
-        for client in tqdm(self.clients):
+        pbar = tqdm(self.clients)
+        for client in pbar:
+            pbar.set_description('Registering clients...')
             client.setup_model(copy.deepcopy(self._featurizer), copy.deepcopy(self._classifier))
-    
+        print('Done\n')
+        
     def register_testloader(self, dataloaders):
         self.test_dataloader.update(dataloaders)
     
@@ -74,6 +77,7 @@ class FedAvg(object):
 
             message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to all {str(self.num_clients)} clients!"
             logging.debug(message)
+            print(message)
             del message
         else:
             # send the global model to selected clients
@@ -82,6 +86,7 @@ class FedAvg(object):
                 self.clients[idx].update_model(self.model.state_dict())
             message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to {str(len(sampled_client_indices))} selected clients!"
             logging.debug(message)
+            print(message)
             del message
 
     def sample_clients(self):
@@ -92,26 +97,28 @@ class FedAvg(object):
         # sample clients randommly
         message = f"[Round: {str(self._round).zfill(3)}] Select clients...!"
         logging.debug(message)
+        print(message)
         del message
 
         num_sampled_clients = max(int(self.fraction * self.num_clients), 1)
         sampled_client_indices = sorted(np.random.choice(a=[i for i in range(self.num_clients)], size=num_sampled_clients, replace=False).tolist())
-
+        print(f'Selected clientss : {sampled_client_indices}')
         return sampled_client_indices
     
 
-    def update_clients(self, sampled_client_indices):
+    def update_clients(self, sampled_client_indices, round):
         """
         Description: This method will call the client.fit methods. 
         Usually doesn't need to override in the derived class.
         """
         def update_single_client(selected_index):
-            self.clients[selected_index].fit()
+            self.clients[selected_index].fit(round)
             client_size = len(self.clients[selected_index])
             return client_size
 
         message = f"[Round: {str(self._round).zfill(3)}] Start updating selected {len(sampled_client_indices)} clients...!"
         logging.debug(message)
+        print(message)
         selected_total_size = 0
         if self.mp_flag:
             with pool.ThreadPool(processes=cpu_count() - 1) as workhorse:
@@ -123,6 +130,7 @@ class FedAvg(object):
                 selected_total_size += client_size
         message = f"[Round: {str(self._round).zfill(3)}] ...{len(sampled_client_indices)} clients are selected and updated (with total sample size: {str(selected_total_size)})!"
         logging.debug(message)
+        print(message)
         return selected_total_size
 
 
@@ -146,6 +154,7 @@ class FedAvg(object):
         """Average the updated and transmitted parameters from each selected client."""
         message = f"[Round: {str(self._round).zfill(3)}] Aggregate updated weights of {len(sampled_client_indices)} clients...!"
         logging.debug(message)
+        print(message)
         del message
 
         averaged_weights = OrderedDict()
@@ -160,10 +169,11 @@ class FedAvg(object):
 
         message = f"[Round: {str(self._round).zfill(3)}] ...updated weights of {len(sampled_client_indices)} clients are successfully averaged!"
         logging.debug(message)
+        print(message)
         del message
     
 
-    def train_federated_model(self):
+    def train_federated_model(self, round):
         """Do federated training."""
         # select pre-defined fraction of clients randomly
         sampled_client_indices = self.sample_clients()
@@ -172,7 +182,7 @@ class FedAvg(object):
         self.transmit_model(sampled_client_indices)
 
         # updated selected clients with local dataset
-        selected_total_size = self.update_clients(sampled_client_indices)
+        selected_total_size = self.update_clients(sampled_client_indices, round)
 
         # evaluate selected clients with local dataset (same as the one used for local update)
         # self.evaluate_clients(sampled_client_indices)
@@ -191,7 +201,7 @@ class FedAvg(object):
         with torch.no_grad():
             y_pred = None
             y_true = None
-            for batch in tqdm(dataloader):
+            for batch in dataloader:
                 data, labels, meta_batch = batch[0], batch[1], batch[2]
                 if isinstance(meta_batch, list):
                     meta_batch = meta_batch[0]
@@ -225,7 +235,6 @@ class FedAvg(object):
                     y_true = torch.cat((y_true, labels))
                     metadata = torch.cat((metadata, meta_batch))
             metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
-            print(metric)
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
         return metric
@@ -234,31 +243,32 @@ class FedAvg(object):
         """
         Description: Execute the whole process of the federated learning.
         """
-        message = f"Round \t "
-        for testset_name in self.test_dataloader.keys():
-            message += f"{testset_name} \t "
-        logging.info(message)
         key_metric = []
-        for r in range(self.num_rounds):
-            print("num of rounds: {}".format(r))
-            start = time.time()
+        for r in tqdm(range(self.num_rounds), desc='Training round'):
+            test_acc_list = []
+            print("Round {}".format(r+1))
             key_metric.append([])
             self._round += 1
-            self.train_federated_model()
-            end = time.time()
-            print(end-start)
+            self.train_federated_model(r)
             message = f"{str(self._round).zfill(3)} \t "
             for name, dataloader in self.test_dataloader.items():
                 metric = self.evaluate_global_model(dataloader)
-                print(metric[1])
+                print(f"Hold out {name} results: TestAcc: {metric[0]['acc_avg']}")
+                test_acc_list.append(metric[0]['acc_avg'])
                 for value in metric[0].values():
                     message += f"{value:05.4} "
                 message += f"\t"
                 key_metric[-1].append(list(metric[0].values())[-1])
             logging.info(message)
+            wandb.log({'OOD Valid Acc': test_acc_list[0]}, step=r+1)
+            wandb.log({'OOD Test Acc': test_acc_list[1]}, step=r+1)
+            wandb.log({'ID Valid Acc': test_acc_list[2]}, step=r+1)
+            wandb.log({'ID Test Acc': test_acc_list[3]}, step=r+1)
             self.save_model(r)
         key_metric = np.array(key_metric)
-        in_max_idx, lodo_max_idx,  _ = np.argmax(key_metric, axis=0)
+        # import pdb
+        # pdb.set_trace()
+        in_max_idx, lodo_max_idx, _, _ = np.argmax(key_metric, axis=0)
         print(f"{key_metric[in_max_idx][2]:05.4} \t {key_metric[in_max_idx][3]:05.4} \t {key_metric[lodo_max_idx][3]:05.4}")
         self.transmit_model()
 
