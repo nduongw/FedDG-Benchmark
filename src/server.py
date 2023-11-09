@@ -184,6 +184,8 @@ class FedAvg(object):
     def evaluate_global_model(self, dataloader):
         """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
+        # import pdb
+        # pdb.set_trace()
         self.model.to(self.device)
 
         with torch.no_grad():
@@ -261,7 +263,7 @@ class FedAvg(object):
         self.transmit_model()
 
     def save_model(self, num_epoch):
-        path = f"/local/scratch/a/bai116/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
+        path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
         torch.save(self.model.state_dict(), path)
 
 

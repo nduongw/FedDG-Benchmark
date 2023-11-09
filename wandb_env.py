@@ -1,2 +1,2 @@
-WANDB_ENTITY = ''
-WANDB_PROJECT = 'FedDG_Benchmark'
+WANDB_ENTITY = 'aiotlab'
+WANDB_PROJECT = 'FedDG'

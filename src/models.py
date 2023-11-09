@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models
+from torchvision.models import ResNet50_Weights
 from transformers import GPT2LMHeadModel, GPT2Model
 from transformers import GPT2Tokenizer
 from transformers import BertForSequenceClassification, BertModel
@@ -71,7 +72,7 @@ class ResNet(torch.nn.Module):
         self.probabilistic = probabilistic
         # self.network = torchvision.models.resnet18(pretrained=True)
         # self.n_outputs = 512
-        self.network = torchvision.models.resnet50(pretrained=True)
+        self.network = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
         self.n_outputs = feature_dimension
 
         # self.network = remove_batch_norm_from_resnet(self.network)

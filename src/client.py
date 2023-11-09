@@ -56,9 +56,10 @@ class ERM(object):
             self.scheduler_config = {'factor': 1, 'total_iters': 1}
         self.dataloader = get_train_loader(self.loader_type, self.dataset, batch_size=self.batch_size, uniform_over_groups=None, grouper=self.ds_bundle.grouper, distinct_groups=False, n_groups_per_batch=self.n_groups_per_batch)
         self.saved_optimizer = False
-        self.opt_dict_path = "/local/scratch/a/bai116/opt_dict/client_{}.pt".format(self.client_id)
-        self.sch_dict_path = "/local/scratch/a/bai116/sch_dict/client_{}.pt".format(self.client_id)
+        self.opt_dict_path = f"{self.hparam['opt_dict_path']}/client_{self.client_id}.pt"
+        self.sch_dict_path = f"{self.hparam['sch_dict_path']}/client_{self.client_id}.pt"
         if os.path.exists(self.opt_dict_path): os.remove(self.opt_dict_path)
+        if os.path.exists(self.sch_dict_path): os.remove(self.sch_dict_path)
 
     def setup_model(self, featurizer, classifier):
         self._featurizer = featurizer
@@ -77,6 +78,8 @@ class ERM(object):
     def init_train(self):
         self.model.train()
         self.model.to(self.device)
+        # import pdb
+        # pdb.set_trace()
         self.optimizer = eval(self.optimizer_name)(self.model.parameters(), **self.optim_config)
         self.scheduler = eval(self.scheduler_name)(self.optimizer, **self.scheduler_config)
         if self.saved_optimizer:

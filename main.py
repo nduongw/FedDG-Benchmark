@@ -32,18 +32,21 @@ def main(args):
     with open(config_file) as fh:
         config = json.load(fh)
     hparam.update(config)
-    wandb_project = WANDB_PROJECT + '_' + hparam['dataset']
+    wandb_project = WANDB_PROJECT
     # setup WanDB
     wandb.init(project=wandb_project,
                 entity=WANDB_ENTITY,
+                group=hparam['dataset'],
                 config=hparam)
     wandb.run.log_code()
     config['id'] = wandb.run.id
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f'Current available device: {device}')
     seed = hparam['seed']
     set_seed(seed)
     data_path = hparam['data_path']
     if not os.path.exists(data_path + "opt_dict/"): os.makedirs(data_path + "opt_dict/")
+    if not os.path.exists(data_path + "sch_dict/"): os.makedirs(data_path + "sch_dict/")
     if not os.path.exists(data_path + "models/"): os.makedirs(data_path + "models/")
 
     # optimizer preprocess
@@ -123,7 +126,9 @@ def main(args):
     del message; gc.collect() 
 
     # initialize server (model should be initialized in the server. )
-    central_server = eval(hparam["server_method"])(device, ds_bundle, hparam)
+    # import pdb
+    # pdb.set_trace()
+    central_server = eval(hparam["server_method"])(seed, config['id'], device, ds_bundle, hparam)
     if hparam['client_method'] == "FedDG":
         central_server.set_amploader(global_dataloader)
     if hparam['start_epoch'] == 0:
