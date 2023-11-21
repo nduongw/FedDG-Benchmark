@@ -1,1 +1,0 @@
-CUDA_VISIBLE_DEVICES=0 python main.py --config_file ./config/ERM/pacs_c100/centralized.json

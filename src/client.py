@@ -105,8 +105,6 @@ class ERM(object):
             if self.hparam['wandb']:
                 wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
             
-
-
         self.end_train()
         self.model.to('cpu')
     
@@ -117,6 +115,7 @@ class ERM(object):
         g = self.ds_bundle.grouper.metadata_to_group(metadata).to(self.device)
         metadata = metadata.to(self.device)
         outputs = self.model(x)
+        
         # print(outputs.shape)
         results = {
             'g': g,
@@ -209,11 +208,13 @@ class IRM(ERM):
         del grad_1, grad_2
         return result
 
+
 class VREx(IRM):
     def irm_penalty(self, losses):
         mean = losses.mean()
         penalty = ((losses - mean) ** 2).mean()
         return penalty
+
 
 class Fish(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
@@ -255,6 +256,7 @@ class Fish(ERM):
         param_dict = param_dict + self.meta_lr * (ParamDict(self.model.state_dict()) - param_dict)
         self.model.load_state_dict(copy.deepcopy(param_dict))
         return (y_true.shape)[0] * group_loss.item()
+
 
 class MMD(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
@@ -349,6 +351,7 @@ class MMD(ERM):
             self.optimizer.zero_grad()
         return (results['y_pred'].shape)[0] * objective.item()
 
+
 class Coral(MMD):
     def penalty(self,x,y):
         if x.dim() > 2:
@@ -403,6 +406,7 @@ class GroupDRO(ERM):
         self.optimizer.zero_grad()
         return (results['y_pred'].shape)[0] * objective.item()
 
+
 class Mixup(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
         super().__init__(client_id, device, dataset, ds_bundle, hparam)
@@ -443,6 +447,7 @@ class Mixup(ERM):
         self.optimizer.step()
         self.optimizer.zero_grad()
         return (results['y_pred'].shape)[0] * objective.item()
+
 
 class FourierMixup(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
@@ -797,6 +802,7 @@ class ScaffoldClient(ERM):
             self.model.load_state_dict(copy.deepcopy(param_dict))
         return (results['y_pred'].shape)[0] * objective.item() 
 
+
 class FedProx(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
         super().__init__(client_id, device, dataset, ds_bundle, hparam)
@@ -838,3 +844,71 @@ class FedProx(ERM):
         self.optimizer.step()
         self.optimizer.zero_grad()
         return (results['y_pred'].shape)[0] * objective.item() 
+
+
+class ProposalClient(ERM):
+    def __init__(self, client_id, device, dataset, ds_bundle, hparam):
+        super().__init__(client_id, device, dataset, ds_bundle, hparam)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def setup_model(self, model):
+        self.model = model
+    
+    def fit(self, global_round):
+        """Update local model using local dataset."""
+        self.init_train()
+        training_loss = 0.
+        for e in range(self.local_epochs):
+            for batch in self.dataloader:
+                self.model.zero_grad()
+                self.optimizer.zero_grad()
+                
+                x, y_true, _ = batch
+                x = x.to(self.device)
+                x.requires_grad_(True)
+                y_true = y_true.to(self.device)
+                y_pred, c_pred, u_pred = self.model(x)
+                
+                main_loss = self.criterion(c_pred, y_true)
+                uncertainty_loss = self.criterion(u_pred, y_true)
+                gradient_penalty = self.calc_gradient_penalty(x, y_pred)
+                loss = main_loss + uncertainty_loss + self.hparam['gp'] * gradient_penalty
+                
+                loss.backward()
+                self.optimizer.step()
+                x.requires_grad_(False)
+                
+                with torch.no_grad():
+                    self.model.eval()
+                    self.model.update_embeddings(x, y_true)
+                
+                training_loss += loss.item()
+            if self.hparam['wandb']:
+                wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
+            
+        self.end_train()
+        self.model.to('cpu')
+
+    def calc_gradients_input(self, x, y_pred):
+        gradients = torch.autograd.grad(
+            outputs=y_pred,
+            inputs=x,
+            grad_outputs=torch.ones_like(y_pred),
+            create_graph=True,
+        )[0]
+
+        gradients = gradients.flatten(start_dim=1)
+
+        return gradients
+    
+    def calc_gradient_penalty(self, x, y_pred):
+        gradients = self.calc_gradients_input(x, y_pred)
+
+        # L2 norm
+        grad_norm = gradients.norm(2, dim=1)
+
+        # Two sided penalty
+        gradient_penalty = ((grad_norm - 1) ** 2).mean()
+
+        return gradient_penalty
+    

@@ -6,7 +6,7 @@ from wilds.common.metrics.loss import ElementwiseLoss, Loss, MultiTaskLoss
 from wilds.common.metrics.all_metrics import MSE
 
 from .splitter import *
-from .models import ResNet, code_gpt_py, Classifier, DistilBertFeaturizer, CNN
+from .models import ResNet, code_gpt_py, Classifier, DistilBertFeaturizer, CNN, UEModel
 from transformers import DistilBertTokenizerFast
 
 class ObjBundle(object):
@@ -98,6 +98,46 @@ class IWildCam(ObjBundle):
 class PACS(ObjBundle):
     def _loss(self):
         return ElementwiseLoss(loss_fn=nn.CrossEntropyLoss(reduction='none', ignore_index=-100))
+    
+    @property
+    def _input_shape(self):
+        return (3, 224, 224)
+    
+    @property
+    def _train_transform(self):
+        return transforms.Compose([
+            transforms.Resize((self._input_shape[1],self._input_shape[2])),
+            transforms.RandomResizedCrop(self._input_shape[1], scale=(0.7, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+            transforms.RandomGrayscale(),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            
+        ])
+        
+    @property
+    def _test_transform(self):
+        return transforms.Compose([
+            transforms.Resize((self._input_shape[1], self._input_shape[2])),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+    @property
+    def _domain_fields(self):
+        return ['domain',]
+    
+class PACSProposal(ObjBundle):
+    def __init__(self, dataset, feature_dimension, hparam, probabilistic=False) -> None:
+        super().__init__(dataset, feature_dimension, probabilistic)
+        self.params = hparam
+        self.model = UEModel(self.input_shape, self.n_classes, hparam, self.feature_dimension, probabilistic)
+        
+    def _loss(self):
+        return ElementwiseLoss(loss_fn=nn.CrossEntropyLoss())
     
     @property
     def _input_shape(self):

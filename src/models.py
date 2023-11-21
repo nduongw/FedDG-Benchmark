@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models
-from torchvision.models import ResNet50_Weights
+from torchvision.models import ResNet18_Weights
 from transformers import GPT2LMHeadModel, GPT2Model
 from transformers import GPT2Tokenizer
 from transformers import BertForSequenceClassification, BertModel
@@ -72,7 +72,7 @@ class ResNet(torch.nn.Module):
         self.probabilistic = probabilistic
         # self.network = torchvision.models.resnet18(pretrained=True)
         # self.n_outputs = 512
-        self.network = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
+        self.network = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
         self.n_outputs = feature_dimension
 
         # self.network = remove_batch_norm_from_resnet(self.network)
@@ -227,7 +227,61 @@ def Classifier(in_features, out_features, is_nonlinear=False):
     else:
         return torch.nn.Linear(in_features, out_features)
 
+class UEModel(nn.Module):
+    def __init__(self, input_shape, n_classes, params, feature_dimension, probabilistic):
+        super().__init__()
+        self.featurizer = ResNet(input_shape, feature_dimension=feature_dimension, probabilistic=probabilistic)
+        self.classifier = Classifier(self.featurizer.n_outputs, n_classes)
+        self.softmax = nn.Softmax(dim=1)
 
+        #model attributes
+        self.n_classes = n_classes
+        self.gamma = params['client']["gamma"]
+        self.sigma = params['client']["sigma"]
+        self.centroid_size = params['client']["centroid_size"]
+        
+        self.W = torch.nn.Parameter(torch.zeros(self.centroid_size, n_classes, self.featurizer.n_outputs))
+        nn.init.kaiming_normal_(self.W, nonlinearity="relu")
+        
+        self.register_buffer('N', torch.ones(n_classes) + 13)
+        self.register_buffer('m', torch.normal(torch.zeros(self.centroid_size, n_classes), 0.05))
+
+        self.m = self.m * self.N
+    
+    def rbf(self, z):
+        z = torch.einsum("ij,mnj->imn", z, self.W)
+
+        embeddings = self.m / self.N.unsqueeze(0)
+
+        diff = z - embeddings.unsqueeze(0)
+        diff = (diff ** 2).mean(1).div(2 * self.sigma ** 2).mul(-1).exp()
+
+        return diff
+
+    def one_hot(self, x, class_count):
+        return torch.eye(class_count)[x,:].to('cuda')
+
+    def update_embeddings(self, x, y):
+        y = self.one_hot(y, self.n_classes)
+        self.N = self.gamma * self.N + (1 - self.gamma) * y.sum(0)
+
+        z = self.featurizer(x)
+
+        z = torch.einsum("ij,mnj->imn", z, self.W)
+        embedding_sum = torch.einsum("ijk,ik->jk", z, y)
+
+        self.m = self.gamma * self.m + (1 - self.gamma) * embedding_sum
+    
+    def forward(self, x):
+        z = self.featurizer(x)
+        
+        u_pred = self.rbf(z)
+        out = self.classifier(z)
+        c_pred = self.softmax(out)
+        
+        y_pred = (u_pred + c_pred) / 2
+        return y_pred, u_pred, c_pred
+        
 class BertClassifier(BertForSequenceClassification):
     def __init__(self, config):
         super().__init__(config)
