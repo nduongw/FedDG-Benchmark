@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -70,9 +71,7 @@ class ResNet(torch.nn.Module):
     def __init__(self, input_shape, feature_dimension=2048, probabilistic=False):
         super(ResNet, self).__init__()
         self.probabilistic = probabilistic
-        # self.network = torchvision.models.resnet18(pretrained=True)
-        # self.n_outputs = 512
-        self.network = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
+        self.network = torchvision.models.resnet18(pretrained=True)
         self.n_outputs = feature_dimension
 
         # self.network = remove_batch_norm_from_resnet(self.network)
@@ -241,6 +240,7 @@ class UEModel(nn.Module):
         self.centroid_size = params['client']["centroid_size"]
         
         self.W = torch.nn.Parameter(torch.zeros(self.centroid_size, n_classes, self.featurizer.n_outputs))
+        # self.W = torch.nn.Parameter(torch.zeros(self.centroid_size, self.featurizer.n_outputs))
         nn.init.kaiming_normal_(self.W, nonlinearity="relu")
         
         self.register_buffer('N', torch.ones(n_classes) + 13)
@@ -250,7 +250,8 @@ class UEModel(nn.Module):
     
     def rbf(self, z):
         z = torch.einsum("ij,mnj->imn", z, self.W)
-
+        # z.unsqueeze_(-1)
+        # z = z.expand((-1, -1, self.n_classes))
         embeddings = self.m / self.N.unsqueeze(0)
 
         diff = z - embeddings.unsqueeze(0)
@@ -261,16 +262,20 @@ class UEModel(nn.Module):
     def one_hot(self, x, class_count):
         return torch.eye(class_count)[x,:].to('cuda')
 
-    def update_embeddings(self, x, y):
+    def update_embeddings(self, x, y, global_round):
+        self.gamma = max(0.01, 0.1 - 0.01 * global_round)
         y = self.one_hot(y, self.n_classes)
-        self.N = self.gamma * self.N + (1 - self.gamma) * y.sum(0)
+        self.N = (1 - self.gamma) * self.N + self.gamma * y.sum(0)
 
         z = self.featurizer(x)
 
         z = torch.einsum("ij,mnj->imn", z, self.W)
         embedding_sum = torch.einsum("ijk,ik->jk", z, y)
 
-        self.m = self.gamma * self.m + (1 - self.gamma) * embedding_sum
+        self.m = (1 - self.gamma) * self.m + self.gamma * embedding_sum
+
+        # wandb.log({"gamma": self.gamma}, step=global_round)
+        np.save(f'centroid_at_round{global_round}.npy', self.m.detach().cpu().numpy())
     
     def forward(self, x):
         z = self.featurizer(x)

@@ -1,7 +1,0 @@
-{
-    "log_path": "./log",
-    "data_path": "/local/scratch/a/shared/",
-    "dataset_path": "/local/scratch/a/shared/datasets/",
-    "start_epoch": 0,
-    "id": "khfbrl08"
-}

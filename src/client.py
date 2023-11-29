@@ -88,7 +88,7 @@ class ERM(object):
     
     def end_train(self):
         self.optimizer.zero_grad(set_to_none=True)
-        self.model.to("cpu")
+        # self.model.to("cpu")
         torch.save(self.optimizer.state_dict(), self.opt_dict_path)
         torch.save(self.scheduler.state_dict(), self.sch_dict_path)
         del self.scheduler, self.optimizer
@@ -858,6 +858,8 @@ class ProposalClient(ERM):
         """Update local model using local dataset."""
         self.init_train()
         training_loss = 0.
+        u_loss = 0.
+        c_loss = 0.
         for e in range(self.local_epochs):
             for batch in self.dataloader:
                 self.model.zero_grad()
@@ -871,23 +873,26 @@ class ProposalClient(ERM):
                 
                 main_loss = self.criterion(c_pred, y_true)
                 uncertainty_loss = self.criterion(u_pred, y_true)
-                gradient_penalty = self.calc_gradient_penalty(x, y_pred)
+                gradient_penalty = self.calc_gradient_penalty(x, u_pred)
                 loss = main_loss + uncertainty_loss + self.hparam['gp'] * gradient_penalty
-                
                 loss.backward()
                 self.optimizer.step()
                 x.requires_grad_(False)
                 
                 with torch.no_grad():
                     self.model.eval()
-                    self.model.update_embeddings(x, y_true)
+                    self.model.update_embeddings(x, y_true, global_round)
                 
                 training_loss += loss.item()
+                u_loss += uncertainty_loss.item()
+                c_loss += main_loss.item()
             if self.hparam['wandb']:
                 wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
+                wandb.log({"uncertainty loss/{}".format(self.client_id): u_loss/len(self.dataset)}, step=global_round)
+                wandb.log({"classifier loss/{}".format(self.client_id): c_loss/len(self.dataset)}, step=global_round)
             
         self.end_train()
-        self.model.to('cpu')
+        # self.model.to('cpu')
 
     def calc_gradients_input(self, x, y_pred):
         gradients = torch.autograd.grad(

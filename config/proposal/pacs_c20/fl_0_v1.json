@@ -1,13 +1,13 @@
 {
     "global": {
         "log_path": "./log",
-        "num_clients": 10,
+        "num_clients": 50,
         "seed": 42,
         "batch_size": 32,
         "data_path": "./data/",
         "dataset": "PACS",
         "start_epoch": 0,
-        "feature_dimension": 2048,
+        "feature_dimension": 512,
         "split_scheme": "official"
     },
 
@@ -16,12 +16,12 @@
         "data_path": "./data/",
         "algorithm": "ProposalServer",
         "fraction": 0.2,
-        "num_rounds": 50
+        "num_rounds": 100
     },
 
     "client": {
         "algorithm": "ProposalClient",
-        "local_epochs": 1,
+        "local_epochs": 5,
         "n_groups_per_batch": 2,
         "batch_size": 32,
         "wandb": 1,
@@ -30,17 +30,17 @@
         "sch_dict_path": "./data/sch_dict",
         "optimizer_config": {
             "lr": 5e-5,
-            "weight_decay": 0,
+            "weight_decay": 1e-5,
             "eps": 1e-8
         },
         "gamma": 0.999,
         "sigma": 0.1,
-        "centroid_size": 16,
-        "gp": 0.75
+        "centroid_size": 32,
+        "gp": 0.5
     },
 
     "dataset": {
         "dataset_path": "./data/",
-        "iid": 0
+        "iid": 0.1
     }
 }

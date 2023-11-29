@@ -1,7 +1,7 @@
 import copy
 import logging
 import time
-
+import pickle
 from multiprocessing import pool, cpu_count
 
 import numpy as np
@@ -191,7 +191,7 @@ class FedAvg(object):
         mixing_coefficients = [len(self.clients[idx]) / selected_total_size for idx in sampled_client_indices]
         self.aggregate(sampled_client_indices, mixing_coefficients)
     
-    def evaluate_global_model(self, dataloader):
+    def evaluate_global_model(self, dataloader, global_round, name):
         """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
         # import pdb
@@ -201,7 +201,11 @@ class FedAvg(object):
         with torch.no_grad():
             y_pred = None
             y_true = None
-            for batch in dataloader:
+            stored_data = {
+                'data': [],
+                'label': [],
+            }
+            for idx, batch in enumerate(dataloader):
                 data, labels, meta_batch = batch[0], batch[1], batch[2]
                 if isinstance(meta_batch, list):
                     meta_batch = meta_batch[0]
@@ -223,6 +227,8 @@ class FedAvg(object):
                         features = features.view(data.shape[0], -1, z_dim)
                 else:
                     features = self.featurizer(data)
+                    stored_data['data'].append(features.detach().cpu().numpy())
+                    stored_data['label'].append(labels.detach().cpu().numpy())
                 prediction = self.classifier(features)
                 if self.ds_bundle.is_classification:
                     prediction = torch.argmax(prediction, dim=-1)
@@ -234,6 +240,8 @@ class FedAvg(object):
                     y_pred = torch.cat((y_pred, prediction))
                     y_true = torch.cat((y_true, labels))
                     metadata = torch.cat((metadata, meta_batch))
+            np.savez(f'./results/data_round{global_round}_{name}.npz',data=stored_data)
+                
             metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
@@ -244,6 +252,7 @@ class FedAvg(object):
         Description: Execute the whole process of the federated learning.
         """
         key_metric = []
+        max_test_acc = 0.0
         for r in tqdm(range(self.num_rounds), desc='Training round'):
             test_acc_list = []
             print("Round {}".format(r+1))
@@ -252,7 +261,7 @@ class FedAvg(object):
             self.train_federated_model(r)
             message = f"{str(self._round).zfill(3)} \t "
             for name, dataloader in self.test_dataloader.items():
-                metric = self.evaluate_global_model(dataloader)
+                metric = self.evaluate_global_model(dataloader, r, name)
                 print(f"Hold out {name} results: TestAcc: {metric[0]['acc_avg']}")
                 test_acc_list.append(metric[0]['acc_avg'])
                 for value in metric[0].values():
@@ -264,7 +273,8 @@ class FedAvg(object):
             wandb.log({'OOD Test Acc': test_acc_list[1]}, step=r+1)
             wandb.log({'ID Valid Acc': test_acc_list[2]}, step=r+1)
             wandb.log({'ID Test Acc': test_acc_list[3]}, step=r+1)
-            self.save_model(r)
+            if max_test_acc < test_acc_list[1]:
+                self.save_model(r)
         key_metric = np.array(key_metric)
         # import pdb
         # pdb.set_trace()
@@ -272,8 +282,8 @@ class FedAvg(object):
         print(f"{key_metric[in_max_idx][2]:05.4} \t {key_metric[in_max_idx][3]:05.4} \t {key_metric[lodo_max_idx][3]:05.4}")
         self.transmit_model()
 
-    def save_model(self, num_epoch):
-        path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
+    def save_model(self, round):
+        path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_round{round}.pth"
         torch.save(self.model.state_dict(), path)
 
 
@@ -466,6 +476,7 @@ class ScaffoldServer(FedAvg):
 class ProposalServer(FedAvg):
     def __init__(self, seed, exp_id, device, ds_bundle, server_config):
         super().__init__(seed, exp_id, device, ds_bundle, server_config)
+        self.global_centroid = None
     
     def setup_model(self, model_file, start_epoch):
         """
@@ -572,17 +583,49 @@ class ProposalServer(FedAvg):
         mixing_coefficients = [len(self.clients[idx]) / selected_total_size for idx in sampled_client_indices]
         self.aggregate(sampled_client_indices, mixing_coefficients)
     
-    def evaluate_global_model(self, dataloader):
+    def transmit_model(self, sampled_client_indices=None):
+        """
+            Description: Send the updated global model to selected/all clients.
+            This method could be overriden by the derived class if one algorithm requires to send things other than model parameters.
+        """
+        if sampled_client_indices is None:
+            # send the global model to all clients before the very first and after the last federated round
+            for client in tqdm(self.clients, leave=False):
+            # for client in self.clients:
+                client.update_model(self.model.state_dict())
+                client.m = self.global_centroid
+
+            message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to all {str(self.num_clients)} clients!"
+            logging.debug(message)
+            print(message)
+            del message
+        else:
+            # send the global model to selected clients
+            for idx in tqdm(sampled_client_indices, leave=False):
+            # for idx in sampled_client_indices:
+                self.clients[idx].update_model(self.model.state_dict())
+                self.clients[idx].m = self.global_centroid
+            message = f"[Round: {str(self._round).zfill(3)}] ...successfully transmitted models to {str(len(sampled_client_indices))} selected clients!"
+            logging.debug(message)
+            print(message)
+            del message
+    
+    def evaluate_global_model(self, dataloader, global_round, name):
         """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
         # import pdb
         # pdb.set_trace()
         self.model.to(self.device)
-
+        stored_data = {
+                'data': [],
+                'label': [],
+            }
         with torch.no_grad():
             y_pred = None
+            y_pred2 = None
+            y_pred3 = None
             y_true = None
-            for batch in dataloader:
+            for idx, batch in enumerate(dataloader):
                 data, labels, meta_batch = batch[0], batch[1], batch[2]
                 if isinstance(meta_batch, list):
                     meta_batch = meta_batch[0]
@@ -603,21 +646,37 @@ class ProposalServer(FedAvg):
                     if len(features_params.shape) == 3:
                         features = features.view(data.shape[0], -1, z_dim)
                 else:
-                    prediction, _, _ = self.model(data)
+                    prediction, u_pred, c_pred = self.model(data)
+                    features = self.model.featurizer(data)
+                    stored_data['data'].append(features.detach().cpu().numpy())
+                    stored_data['label'].append(labels.detach().cpu().numpy())
                 if self.ds_bundle.is_classification:
                     prediction = torch.argmax(prediction, dim=-1)
+                    prediction2 = torch.argmax(u_pred, dim=-1)
+                    prediction3 = torch.argmax(c_pred, dim=-1)
+                    # import pdb
+                    # pdb.set_trace()
                 if y_pred is None:
                     y_pred = prediction
+                    y_pred2 = prediction2
+                    y_pred3 = prediction3
                     y_true = labels
                     metadata = meta_batch
                 else:
                     y_pred = torch.cat((y_pred, prediction))
+                    y_pred2 = torch.cat((y_pred2, prediction2))
+                    y_pred3 = torch.cat((y_pred3, prediction3))
                     y_true = torch.cat((y_true, labels))
                     metadata = torch.cat((metadata, meta_batch))
+            # import pdb
+            # pdb.set_trace()
+            np.savez(f'./results/data_round{global_round}_{name}.npz',data=stored_data)
             metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
+            metric2 = self.ds_bundle.dataset.eval(y_pred2.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
+            metric3 = self.ds_bundle.dataset.eval(y_pred3.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
-        return metric
+        return metric, metric2, metric3
 
     def fit(self):
         """
@@ -632,8 +691,10 @@ class ProposalServer(FedAvg):
             self.train_federated_model(r)
             message = f"{str(self._round).zfill(3)} \t "
             for name, dataloader in self.test_dataloader.items():
-                metric = self.evaluate_global_model(dataloader)
-                print(f"Hold out {name} results: TestAcc: {metric[0]['acc_avg']}")
+                metric, metric2, metric3 = self.evaluate_global_model(dataloader, r, name)
+                print(f"Hold out {name} results: Overall TestAcc: {metric[0]['acc_avg']}")
+                print(f"Hold out {name} results: Uncertainty TestAcc: {metric2[0]['acc_avg']}")
+                print(f"Hold out {name} results: Classification TestAcc: {metric3[0]['acc_avg']}")
                 test_acc_list.append(metric[0]['acc_avg'])
                 for value in metric[0].values():
                     message += f"{value:05.4} "
@@ -651,6 +712,8 @@ class ProposalServer(FedAvg):
         in_max_idx, lodo_max_idx, _, _ = np.argmax(key_metric, axis=0)
         print(f"{key_metric[in_max_idx][2]:05.4} \t {key_metric[in_max_idx][3]:05.4} \t {key_metric[lodo_max_idx][3]:05.4}")
         self.transmit_model()
+    
+    
 
     def save_model(self, num_epoch):
         path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
@@ -664,8 +727,10 @@ class ProposalServer(FedAvg):
         del message
 
         averaged_weights = OrderedDict()
+        averaged_centroid = torch.zeros_like(self.clients[0].model.m).to(self.device)
         for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
             local_weights = self.clients[idx].model.state_dict()
+            averaged_centroid += self.clients[idx].model.m / len(sampled_client_indices)
             for key in self.model.state_dict().keys():
                 if key == 'W':
                     if it == 0:
@@ -678,6 +743,7 @@ class ProposalServer(FedAvg):
                     else:
                         averaged_weights[key] += coefficients[it] * local_weights[key]
         self.model.load_state_dict(averaged_weights)
+        self.global_centroid = averaged_centroid
 
         message = f"[Round: {str(self._round).zfill(3)}] ...updated weights of {len(sampled_client_indices)} clients are successfully averaged!"
         logging.debug(message)

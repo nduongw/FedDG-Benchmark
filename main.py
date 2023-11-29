@@ -30,9 +30,6 @@ def main(args):
     import os
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "nmalloc"
     
-    now = datetime.datetime.now()
-    dt_string = now.strftime("%d/%m/%Y-%H:%M:%S")
-    
     #load hyperparam
     hparam = vars(args)
     config_file = args.config_file
@@ -40,7 +37,7 @@ def main(args):
         config = json.load(fh)
     hparam.update(config)
     wandb_project = WANDB_PROJECT
-    running_name = f"nclient={hparam['global']['num_clients']}-nround={hparam['server']['num_rounds']}-seed={hparam['global']['seed']}"
+    running_name = f"iid={hparam['dataset']['iid']}-nclient={hparam['global']['num_clients']}-nround={hparam['server']['num_rounds']}-seed={hparam['global']['seed']}_same_space"
     # setup WanDB
     wandb.init(project=wandb_project,
                 entity=WANDB_ENTITY,
@@ -159,28 +156,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='FedDG Benchmark')
     parser.add_argument('--config_file', help='config file', default="config.json")
-    # parser.add_argument('--seed', default=1001, type=int)
-    # parser.add_argument('--num_clients', default=1, type=int)
-    # parser.add_argument('--batch_size', default=16, type=int)
-    # parser.add_argument('--iid', default=1, type=float)
-    # parser.add_argument('--server_method', default='FedAvg')
-    # parser.add_argument('--fraction', default=1, type=float)
-    # parser.add_argument('--f', default=10, type=int)
-    # parser.add_argument('--num_rounds', default=20, type=int)
-    # parser.add_argument('--dataset', default='PACS')
-    # parser.add_argument('--split_scheme', default='official')
-    # parser.add_argument('--client_method', default='ERM')
-    # parser.add_argument('--local_epochs', default=1, type=int)
-    # parser.add_argument('--n_groups_per_batch', default=2, type=int)
-    # parser.add_argument('--optimizer', default='torch.optim.Adam')
-    # parser.add_argument('--feature_dimension', default=2048, type=int)
-    # parser.add_argument('--lr', default=3e-5, type=float)
-    # parser.add_argument('--momentum', default=0, type=float)
-    # parser.add_argument('--weight_decay', default=0, type=float)
-    # parser.add_argument('--eps', default=1e-8, type=float)
-    # parser.add_argument('--hparam1', default=1, type=float, help="irm: lambda; rex: lambda; fish: meta_lr; mixup: alpha; mmd: lambda; coral: lambda; groupdro: groupdro_eta; fedprox: mu; feddg: ratio; fedadg: alpha; fedgma: mask_threshold; fedsr: l2_regularizer;")
-    # parser.add_argument('--hparam2', default=1, type=float, help="fedsr: cmi_regularizer; irm: penalty_anneal_iters;fedadg: second_local_epochs")
-
+    parser.add_argument('--running_name', help='name of wandb run')
+    
     args = parser.parse_args()
     main(args)
 
