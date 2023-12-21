@@ -194,9 +194,6 @@ class FedAvg(object):
     def evaluate_global_model(self, dataloader, global_round, name):
         """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
-        # import pdb
-        # pdb.set_trace()
-        self.model.to(self.device)
 
         with torch.no_grad():
             y_pred = None
@@ -244,10 +241,9 @@ class FedAvg(object):
                 
             metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
             if self.device == "cuda": torch.cuda.empty_cache()
-        self.model.to("cpu")
         return metric
 
-    def fit(self):
+    def fit(self, running_name):
         """
         Description: Execute the whole process of the federated learning.
         """
@@ -274,16 +270,16 @@ class FedAvg(object):
             wandb.log({'ID Valid Acc': test_acc_list[2]}, step=r+1)
             wandb.log({'ID Test Acc': test_acc_list[3]}, step=r+1)
             if max_test_acc < test_acc_list[1]:
-                self.save_model(r)
+                print(f'OOD Test Accuracy increase from {max_test_acc} to {test_acc_list[1]} --> Saving model')
+                self.save_model(r, running_name)
+                max_test_acc = test_acc_list[1]
         key_metric = np.array(key_metric)
-        # import pdb
-        # pdb.set_trace()
         in_max_idx, lodo_max_idx, _, _ = np.argmax(key_metric, axis=0)
         print(f"{key_metric[in_max_idx][2]:05.4} \t {key_metric[in_max_idx][3]:05.4} \t {key_metric[lodo_max_idx][3]:05.4}")
         self.transmit_model()
 
-    def save_model(self, round):
-        path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_round{round}.pth"
+    def save_model(self, round, running_name):
+        path = f"{self.server_config['data_path']}models/{running_name}/{self.ds_bundle.name}_bestmodel_round{round}.pth"
         torch.save(self.model.state_dict(), path)
 
 
@@ -678,7 +674,7 @@ class ProposalServer(FedAvg):
         self.model.to("cpu")
         return metric, metric2, metric3
 
-    def fit(self):
+    def fit(self, running_name):
         """
         Description: Execute the whole process of the federated learning.
         """
@@ -705,7 +701,7 @@ class ProposalServer(FedAvg):
             wandb.log({'OOD Test Acc': test_acc_list[1]}, step=r+1)
             wandb.log({'ID Valid Acc': test_acc_list[2]}, step=r+1)
             wandb.log({'ID Test Acc': test_acc_list[3]}, step=r+1)
-            self.save_model(r)
+            self.save_model(r, running_name)
         key_metric = np.array(key_metric)
         # import pdb
         # pdb.set_trace()
@@ -715,8 +711,8 @@ class ProposalServer(FedAvg):
     
     
 
-    def save_model(self, num_epoch):
-        path = f"{self.server_config['data_path']}models/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
+    def save_model(self, num_epoch, running_name):
+        path = f"{self.server_config['data_path']}models/{running_name}/{self.ds_bundle.name}_{self.clients[0].name}_{self.id}_{num_epoch}.pth"
         torch.save(self.model.state_dict(), path)
 
     def aggregate(self, sampled_client_indices, coefficients):

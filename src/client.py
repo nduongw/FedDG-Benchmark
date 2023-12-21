@@ -77,7 +77,6 @@ class ERM(object):
     
     def init_train(self):
         self.model.train()
-        self.model.to(self.device)
         # import pdb
         # pdb.set_trace()
         self.optimizer = eval(self.optimizer_name)(self.model.parameters(), **self.optim_config)
@@ -106,7 +105,6 @@ class ERM(object):
                 wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
             
         self.end_train()
-        self.model.to('cpu')
     
     def process_batch(self, batch):
         x, y_true, metadata = batch
@@ -552,8 +550,6 @@ class FedADGClient(ERM):
 
         
     def end_train(self):
-        self.generator.to("cpu")
-        self.discriminator.to("cpu")
         super().end_train()
 
 
@@ -778,9 +774,9 @@ class ScaffoldClient(ERM):
     
     def end_train(self):
         super().end_train()
-        self.c_local = self.c_local.to('cpu')
-        if self.c_global is not None:
-            self.c_global = self.c_global.to('cpu')
+        # self.c_local = self.c_local.to('cpu')
+        # if self.c_global is not None:
+            # self.c_global = self.c_global.to('cpu')
 
     def step(self, results):
         # print(results['y_true'])
@@ -825,7 +821,7 @@ class FedProx(ERM):
     
     def end_train(self):
         self.optimizer.zero_grad(set_to_none=True)
-        self.model.to("cpu")
+        # self.model.to("cpu")
         torch.save(self.optimizer.state_dict(), self.opt_dict_path)
         torch.save(self.scheduler.state_dict(), self.sch_dict_path)
         del self.scheduler, self.optimizer, self.global_model
@@ -852,7 +848,7 @@ class ProposalClient(ERM):
         self.criterion = nn.CrossEntropyLoss()
 
     def setup_model(self, model):
-        self.model = model
+        self.model = model.to(self.device)
     
     def fit(self, global_round):
         """Update local model using local dataset."""
@@ -866,15 +862,14 @@ class ProposalClient(ERM):
                 self.optimizer.zero_grad()
                 
                 x, y_true, _ = batch
-                x = x.to(self.device)
                 x.requires_grad_(True)
-                y_true = y_true.to(self.device)
-                y_pred, c_pred, u_pred = self.model(x)
-                
+                y_pred, u_pred, c_pred = self.model(x)
                 main_loss = self.criterion(c_pred, y_true)
                 uncertainty_loss = self.criterion(u_pred, y_true)
                 gradient_penalty = self.calc_gradient_penalty(x, u_pred)
                 loss = main_loss + uncertainty_loss + self.hparam['gp'] * gradient_penalty
+                # y_pred, _, _ = self.model(x)
+                # loss = self.criterion(y_pred, y_true)
                 loss.backward()
                 self.optimizer.step()
                 x.requires_grad_(False)
@@ -886,13 +881,13 @@ class ProposalClient(ERM):
                 training_loss += loss.item()
                 u_loss += uncertainty_loss.item()
                 c_loss += main_loss.item()
+                
             if self.hparam['wandb']:
                 wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=global_round)
                 wandb.log({"uncertainty loss/{}".format(self.client_id): u_loss/len(self.dataset)}, step=global_round)
                 wandb.log({"classifier loss/{}".format(self.client_id): c_loss/len(self.dataset)}, step=global_round)
             
         self.end_train()
-        # self.model.to('cpu')
 
     def calc_gradients_input(self, x, y_pred):
         gradients = torch.autograd.grad(

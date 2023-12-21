@@ -21,7 +21,7 @@ class ObjBundle(object):
         self.train_transform = self._train_transform
         self.test_transform = self._test_transform
         self.featurizer = ResNet(self.input_shape, self.feature_dimension, probabilistic=probabilistic)
-        self.classifier = Classifier(self.featurizer.n_outputs, self.n_classes)
+        self.classifier = Classifier(self.featurizer.n_outputs, self.n_classes, is_nonlinear=True)
 
     @property
     def is_classification(self):

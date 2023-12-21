@@ -54,7 +54,8 @@ class PACS(WILDSDataset):
         version: str = None,
         root_dir: str = "data",
         download: bool = False,
-        split_scheme: str = "official"
+        split_scheme: str = "official",
+        hparam: str = None
     ):
         # Dataset information
         self._version: Optional[str] = version
@@ -64,25 +65,28 @@ class PACS(WILDSDataset):
         self._y_size: int = 1
         # Path of the dataset
         self._data_dir: str = Path(self.initialize_data_dir(root_dir, download))
-
         # The original dataset contains 7 categories. 
         if self._split_scheme == 'official':
             metadata_filename = "metadata.csv"
-            print('dcc')
+            print('Default splitting')
         else:
-            print('acc')
+            print('Custom splitting')
             metadata_filename = "{}.csv".format(self._split_scheme)
         self._n_classes = 7
-
         # Load splits
         df = pd.read_csv(self._data_dir / metadata_filename)
         # Filenames
         self._input_array = df['path'].values
         # Splits
-        self._split_dict = {'train': 0, 'val': 1, 'test': 2, 'id_val': 3, 'id_test': 4}
-        self._split_names = {'train': 'Train', 'val': 'Validation (OOD/Trans)',
-                                'test': 'Test (OOD/Trans)', 'id_val': 'Validation (ID/Cis)',
-                                'id_test': 'Test (ID/Cis)'}
+        if hparam['server']['algorithm'] == 'FullDomain':
+            self._split_dict = {'train': 0, 'val': 1, 'test': 2}
+            self._split_names = {'train': 'Train', 'val': 'Validation',
+                                    'test': 'Test'}
+        else:
+            self._split_dict = {'train': 0, 'val': 1, 'test': 2, 'id_val': 3, 'id_test': 4}
+            self._split_names = {'train': 'Train', 'val': 'Validation (OOD/Trans)',
+                                    'test': 'Test (OOD/Trans)', 'id_val': 'Validation (ID/Cis)',
+                                    'id_test': 'Test (ID/Cis)'}
 
         df['split_id'] = df['split'].apply(lambda x: self._split_dict[x])
         self._split_array = df["split_id"].values
@@ -137,7 +141,6 @@ class PACS(WILDSDataset):
         return self.standard_eval(
             metric, y_pred, y_true
         )
-
 
 class FourierPACS(PACS):
     def __getitem__(self, idx):

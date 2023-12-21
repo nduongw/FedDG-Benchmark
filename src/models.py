@@ -71,10 +71,10 @@ class ResNet(torch.nn.Module):
     def __init__(self, input_shape, feature_dimension=2048, probabilistic=False):
         super(ResNet, self).__init__()
         self.probabilistic = probabilistic
-        self.network = torchvision.models.resnet18(pretrained=True)
+        self.network = torchvision.models.resnet18(weights='DEFAULT')
         self.n_outputs = feature_dimension
 
-        # self.network = remove_batch_norm_from_resnet(self.network)
+        self.network = remove_batch_norm_from_resnet(self.network)
 
         # adapt number of channels
         nc = input_shape[0]
@@ -246,6 +246,8 @@ class UEModel(nn.Module):
         self.register_buffer('N', torch.ones(n_classes) + 13)
         self.register_buffer('m', torch.normal(torch.zeros(self.centroid_size, n_classes), 0.05))
 
+        self.m.to('cuda')
+        self.N.to('cuda')
         self.m = self.m * self.N
     
     def rbf(self, z):
@@ -284,8 +286,9 @@ class UEModel(nn.Module):
         out = self.classifier(z)
         c_pred = self.softmax(out)
         
-        y_pred = (u_pred + c_pred) / 2
+        y_pred = u_pred * c_pred
         return y_pred, u_pred, c_pred
+        # return out, out, out
         
 class BertClassifier(BertForSequenceClassification):
     def __init__(self, config):

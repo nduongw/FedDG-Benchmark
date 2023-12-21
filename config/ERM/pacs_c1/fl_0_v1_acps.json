@@ -1,0 +1,46 @@
+{
+    "global": {
+        "log_path": "./log",
+        "num_clients": 1,
+        "seed": 42,
+        "batch_size": 32,
+        "data_path": "./data/",
+        "dataset": "PACS",
+        "start_epoch": 0,
+        "feature_dimension": 512,
+        "split_scheme": "ac-p-s"
+    },
+
+    "server": {
+        "mp": false,
+        "data_path": "./data/",
+        "algorithm": "FedAvg",
+        "fraction": 0.2,
+        "num_rounds": 50
+    },
+
+    "client": {
+        "algorithm": "ERM",
+        "local_epochs": 5,
+        "n_groups_per_batch": 2,
+        "batch_size": 32,
+        "wandb": 1,
+        "optimizer": "torch.optim.Adam",
+        "opt_dict_path": "./data/opt_dict",
+        "sch_dict_path": "./data/sch_dict",
+        "optimizer_config": {
+            "lr": 5e-5,
+            "weight_decay": 1e-5,
+            "eps": 1e-8
+        },
+        "gamma": 0.999,
+        "sigma": 0.1,
+        "centroid_size": 32,
+        "gp": 0.5
+    },
+
+    "dataset": {
+        "dataset_path": "./data/",
+        "iid": 0.1
+    }
+}

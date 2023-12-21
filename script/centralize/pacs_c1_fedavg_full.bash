@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python main.py --config_file ./config/ERM/pacs_c1/fl_0_v1_full.json

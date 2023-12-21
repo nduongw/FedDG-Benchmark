@@ -27,9 +27,6 @@ The main file function:
 7. Start the server.
 """
 def main(args):
-    import os
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "nmalloc"
-    
     #load hyperparam
     hparam = vars(args)
     config_file = args.config_file
@@ -37,7 +34,7 @@ def main(args):
         config = json.load(fh)
     hparam.update(config)
     wandb_project = WANDB_PROJECT
-    running_name = f"iid={hparam['dataset']['iid']}-nclient={hparam['global']['num_clients']}-nround={hparam['server']['num_rounds']}-seed={hparam['global']['seed']}_same_space"
+    running_name = f"iid={hparam['dataset']['iid']}-split={hparam['global']['split_scheme'].split('.')[0]}-nclient={hparam['global']['num_clients']}-nround={hparam['server']['num_rounds']}-seed={hparam['global']['seed']}"
     # setup WanDB
     wandb.init(project=wandb_project,
                 entity=WANDB_ENTITY,
@@ -49,14 +46,15 @@ def main(args):
     
     config['id'] = wandb.run.id
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = True if device == 'cuda' else False
     print(f'Current available device: {device}')
     seed = hparam['global']['seed']
     set_seed(seed)
     
     data_path = hparam['global']['data_path']
-    if not os.path.exists(data_path + "opt_dict/"): os.makedirs(data_path + f"opt_dict/{running_name}")
-    if not os.path.exists(data_path + "sch_dict/"): os.makedirs(data_path + f"sch_dict/{running_name}/")
-    if not os.path.exists(data_path + "models/"): os.makedirs(data_path + f"models/{running_name}")
+    if not os.path.exists(data_path + f"opt_dict/{running_name}"): os.makedirs(data_path + f"opt_dict/{running_name}")
+    if not os.path.exists(data_path + f"sch_dict/{running_name}"): os.makedirs(data_path + f"sch_dict/{running_name}/")
+    if not os.path.exists(data_path + f"models/{running_name}"): os.makedirs(data_path + f"models/{running_name}")
 
     # optimizer preprocess
     if hparam['client']['optimizer'] == 'torch.optim.SGD':
@@ -66,7 +64,7 @@ def main(args):
 
     # initialize data
     if hparam['global']['dataset'].lower() == 'pacs':
-        dataset = my_datasets.PACS(version='1.0', root_dir=hparam['dataset']['dataset_path'], download=True)
+        dataset = my_datasets.PACS(version='1.0', root_dir=hparam['dataset']['dataset_path'], download=True, split_scheme=hparam['global']['split_scheme'], hparam=hparam)
     elif hparam['global']['dataset'].lower() == 'officehome':
         dataset = my_datasets.OfficeHome(version='1.0', root_dir=hparam['dataset']['dataset_path'], download=True, split_scheme=hparam["split_scheme"])
     elif hparam['global']['dataset'].lower() == 'femnist':
@@ -106,12 +104,12 @@ def main(args):
     for split in dataset.split_names:
         if split != 'train':
             ds = dataset.get_subset(split, transform=ds_bundle.test_transform)
-            dl = get_eval_loader(loader='standard', dataset=ds, batch_size=hparam['global']["batch_size"])
+            dl = get_eval_loader(loader='standard', dataset=ds, batch_size=hparam['global']["batch_size"], pin_memory=True)
             testloader[split] = dl
 
     
     sampler = RandomSampler(total_subset, replacement=True)
-    global_dataloader = DataLoader(total_subset, batch_size=hparam['global']["batch_size"], sampler=sampler)
+    global_dataloader = DataLoader(total_subset, batch_size=hparam['global']["batch_size"], sampler=sampler, pin_memory=pin_memory)
     # # DS
     # out_test_dataset, test_train = RandomSplitter(ratio=0.5, seed=seed).split(out_test_dataset)
     # out_test_dataset.transform = ds_bundle.test_transform
@@ -127,6 +125,17 @@ def main(args):
         training_datasets = NonIIDSplitter(num_shards=num_shards, iid=hparam['dataset']['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
     else:
         raise ValueError("num_shards should be greater or equal to 1, we got {}".format(num_shards))
+    
+    #move all datasets to GPU
+    # if hparam['global']['dataset'] == 'PACS':
+    #     global_data_gpu = [(data.to(device), label.to(device)) for data, label in global_dataloader]
+    #     global_dataloader = DataLoader(global_data_gpu, batch_size=hparam['global']["batch_size"], sampler=sampler, pin_memory=pin_memory)
+        
+    #     gpu_testloader = []
+    #     for loader in testloader:
+    #         gpu_loader = [(data.to(device), label.to(device)) for data, label in loader]
+    #         gpu_dataloader = DataLoader(gpu_loader, batch_size=hparam['global']["batch_size"], sampler=False)
+    #         gpu_testloader.append(gpu_dataloader)
 
     # initialize client
     clients = []
@@ -146,7 +155,7 @@ def main(args):
     central_server.register_clients(clients)
     central_server.register_testloader(testloader)
     # do federated learning
-    central_server.fit()
+    central_server.fit(running_name)
     
     # bye!
     print("...done all learning process!\n...exit program!")
