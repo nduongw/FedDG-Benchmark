@@ -63,35 +63,35 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
     model.to(device)
     stored_label = []
     max_accuracy = 0.0
-    
+
     for epoch in range(args.num_epoch):
         if args.method == 'conststyle':
             for conststyle in model.conststyle:
                 conststyle.clear_memory()
-            
+
         model.train()
         running_loss = 0.0
-        
+
         for inputs, labels in train_loader:
             inputs, labels, domains = inputs[0].to(device), inputs[1].to(device), labels
             optimizer.zero_grad()
 
-            stored_label.extend(labels.detach().cpu())            
+            stored_label.extend(labels.detach().cpu())
             if args.method == 'conststyle':
                 if epoch == 0:
                     outputs = model(inputs, domains, store_style=True)
                 else:
                     outputs = model(inputs, domains, const_style=True, store_style=True)
-            
+
             outputs = model(inputs)
-            
+
             loss = criterion(outputs, labels)
-            
+
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
-        
+
         if args.method == 'conststyle':
             if epoch % 10 == 0:
                 for conststyle in model.conststyle:
@@ -110,7 +110,7 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
                 # Forward pass
                 if args.method == 'conststyle':
                     outputs = model(inputs, domains, const_style=True, test=True)
-                
+
                 outputs = model(inputs)
 
                 # Calculate accuracy
@@ -122,18 +122,20 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
         test_accuracy = correct_predictions / total_samples
         if test_accuracy >= max_accuracy:
             max_accuracy = test_accuracy
-            
+
         print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
+    if not os.path.exists(f'{args.method}_{args.train_domains}_{args.test_domains}'):
+        os.makedirs(f'{args.method}_{args.train_domains}_{args.test_domains}')
     with open(f'{args.method}_{args.train_domains}_{args.test_domains}/acc.csv', 'a') as f:
         csv_writer = csv.writer(f)
         csv_writer.writerow(['Acc', max_accuracy])
-    
+
 def main(args):
     if os.path.exists(f'{args.method}_{args.train_domains}_{args.test_domains}/acc.csv'):
         os.remove(f'{args.method}_{args.train_domains}_{args.test_domains}/acc.csv')
-    
+
     train_dataset = []
     len_dataset = []
     idx = 1
@@ -153,11 +155,10 @@ def main(args):
         train_dataset.append(sketch_dataset)
         len_dataset.append(torch.full((len(sketch_dataset), 1), idx))
         idx += 1
-    
     concated_train_dataset = ConcatDataset(train_dataset)
     concated_train_domain = torch.vstack(len_dataset)
     train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=32, shuffle=True, num_workers=8)
-    
+
     if 'p' in args.train_domains:
         test_loader = DataLoader(photo_dataset, batch_size=32, shuffle=False, num_workers=8)
     elif 'a' in args.train_domains:
@@ -175,19 +176,18 @@ def main(args):
         model = DSUModel(uncertainty=0.5)
     elif args.method == 'csu':
         model = CSUModel(['layer0', 'layer1', 'layer2', 'layer3', 'layer4', 'layer5'], 0.5, 0.1)
-    
+
     model.model.fc = torch.nn.Linear(model.model.fc.in_features, 7)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
-
+    optimizer = optim.Adam(model.model.parameters(), lr=1e-4, weight_decay=1e-5)
     train(args, model, train_loader, test_loader, criterion, optimizer)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_domains', type=str)
     parser.add_argument('--test_domains', type=str)
-    parser.add_argument('--method', type=str, option=['csu', 'dsu', 'mixstyle', 'conststyle'])
+    parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle'])
     parser.add_argument('--num_epoch', type=int, default=50)
-    
+
     args = parser.parse_args()
     main(args)
