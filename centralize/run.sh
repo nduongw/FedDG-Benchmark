@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python main.py --train_domains pac --test_domain s --method mixstyle --num_epoch 2
