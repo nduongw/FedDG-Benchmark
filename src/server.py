@@ -237,9 +237,8 @@ class FedAvg(object):
                     y_pred = torch.cat((y_pred, prediction))
                     y_true = torch.cat((y_true, labels))
                     metadata = torch.cat((metadata, meta_batch))
-            np.savez(f'./results/data_round{global_round}_{name}.npz',data=stored_data)
                 
-            metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
+            metric = self.ds_bundle.dataset.eval(y_pred, y_true, metadata)
             if self.device == "cuda": torch.cuda.empty_cache()
         return metric
 
