@@ -63,6 +63,7 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
     model.to(device)
     stored_label = []
     max_accuracy = 0.0
+    style_idx = args.style_idx
 
     for epoch in range(args.num_epoch):
         if args.method == 'conststyle':
@@ -82,8 +83,8 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
                     outputs = model(inputs, domains, store_style=True)
                 else:
                     outputs = model(inputs, domains, const_style=True, store_style=True)
-
-            outputs = model(inputs)
+            else:
+                outputs = model(inputs)
 
             loss = criterion(outputs, labels)
 
@@ -95,7 +96,7 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
         if args.method == 'conststyle':
             if epoch % 10 == 0:
                 for conststyle in model.conststyle:
-                    conststyle.cal_mean_std(2)
+                    conststyle.cal_mean_std(style_idx)
 
         print(f"Epoch {epoch+1}/{args.num_epoch}, Train Loss: {running_loss/len(train_loader)}")
 
@@ -110,8 +111,8 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
                 # Forward pass
                 if args.method == 'conststyle':
                     outputs = model(inputs, domains, const_style=True, test=True)
-
-                outputs = model(inputs)
+                else:
+                    outputs = model(inputs)
 
                 # Calculate accuracy
                 _, predicted = torch.max(outputs, 1)
@@ -126,11 +127,18 @@ def train(args, model, train_loader, test_loader, criterion, optimizer):
         print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
-    if not os.path.exists(f'{args.method}_{args.train_domains}_{args.test_domains}'):
-        os.makedirs(f'{args.method}_{args.train_domains}_{args.test_domains}')
-    with open(f'{args.method}_{args.train_domains}_{args.test_domains}/acc.csv', 'a') as f:
+    if args.method == 'conststyle':
+        save_path = f'{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
+
+    else:
+        save_path = f'{args.method}_{args.train_domains}_{args.test_domains}'
+
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    with open(f'{save_path}/acc.csv', 'a') as f:
         csv_writer = csv.writer(f)
         csv_writer.writerow(['Acc', max_accuracy])
+
 
 def main(args):
     if os.path.exists(f'{args.method}_{args.train_domains}_{args.test_domains}/acc.csv'):
@@ -159,13 +167,13 @@ def main(args):
     concated_train_domain = torch.vstack(len_dataset)
     train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=32, shuffle=True, num_workers=8)
 
-    if 'p' in args.train_domains:
+    if 'p' in args.test_domains:
         test_loader = DataLoader(photo_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 'a' in args.train_domains:
+    elif 'a' in args.test_domains:
         test_loader = DataLoader(art_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 'c' in args.train_domains:
+    elif 'c' in args.test_domains:
         test_loader = DataLoader(cartoon_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 's' in args.train_domains:
+    elif 's' in args.test_domains:
         test_loader = DataLoader(sketch_dataset, batch_size=32, shuffle=False, num_workers=8)
 
     if args.method == 'conststyle':
@@ -188,6 +196,6 @@ if __name__ == "__main__":
     parser.add_argument('--test_domains', type=str)
     parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle'])
     parser.add_argument('--num_epoch', type=int, default=50)
-
+    parser.add_argument('--style_idx', type=int, default=0)
     args = parser.parse_args()
     main(args)
