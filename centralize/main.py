@@ -163,6 +163,9 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             })
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
+    args.tracker.log({
+                'Max OD Accuracy': max_accuracy
+            })
     if args.method == 'conststyle':
         save_path = f'results/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
 
