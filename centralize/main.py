@@ -74,7 +74,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
     style_idx = args.style_idx
 
     for epoch in range(args.num_epoch):
-        if args.method == 'conststyle':
+        if args.method == 'conststyle' or args.method == 'conststyle-bn':
             for conststyle in model.conststyle:
                 conststyle.clear_memory()
 
@@ -86,7 +86,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             optimizer.zero_grad()
 
             stored_label.extend(labels.detach().cpu())
-            if args.method == 'conststyle':
+            if args.method == 'conststyle' or args.method == 'conststyle-bn':
                 if epoch == 0:
                     outputs = model(inputs, domains, store_style=True)
                 else:
@@ -101,10 +101,10 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
 
             running_loss += loss.item()
 
-        if args.method == 'conststyle':
+        if args.method == 'conststyle' or args.method == 'conststyle-bn':
             if epoch % 10 == 0:
                 for idx, conststyle in enumerate(model.conststyle):
-                    conststyle.cal_mean_std(idx, style_idx, args)
+                    conststyle.cal_mean_std(idx, style_idx, args, epoch)
 
         print(f"Epoch {epoch+1}/{args.num_epoch}, Train Loss: {running_loss/len(train_loader)}")
 
@@ -117,7 +117,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 inputs, labels = inputs.to(device), labels.to(device)
 
                 # Forward pass
-                if args.method == 'conststyle':
+                if args.method == 'conststyle' or args.method == 'conststyle-bn':
                     outputs = model(inputs, domains, const_style=True, test=True)
                 else:
                     outputs = model(inputs)
@@ -133,7 +133,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             print(f"ID Accuracy: {test_accuracy * 100:.2f}%")
             args.tracker.log({
                 'ID Accuracy': test_accuracy
-            })
+            }, step=epoch)
             
             correct_predictions = 0
             total_samples = 0
@@ -142,7 +142,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 inputs, labels = inputs.to(device), labels.to(device)
 
                 # Forward pass
-                if args.method == 'conststyle':
+                if args.method == 'conststyle' or args.method == 'conststyle-bn':
                     outputs = model(inputs, domains, const_style=True, test=True)
                 else:
                     outputs = model(inputs)
@@ -160,13 +160,13 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             print(f"OD Accuracy: {test_accuracy * 100:.2f}%")
             args.tracker.log({
                 'OD Accuracy': test_accuracy
-            })
+            }, step=epoch)
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
     args.tracker.log({
                 'Max OD Accuracy': max_accuracy
             })
-    if args.method == 'conststyle':
+    if args.method == 'conststyle' or args.method == 'conststyle-bn':
         save_path = f'results/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
 
     else:
@@ -241,12 +241,16 @@ def main(args):
 
     if args.method == 'conststyle':
         model = ConstStyleModel()
+    if args.method == 'conststyle-bn':
+        model = ConstStyleModel2()
     elif args.method == 'mixstyle':
         model = MixStyleModel()
     elif args.method == 'dsu':
-        model = DSUModel(uncertainty=0.5)
+        model = DSUModel(1, uncertainty=0.5)
     elif args.method == 'csu':
         model = CSUModel(['layer0', 'layer1', 'layer2', 'layer3', 'layer4', 'layer5'], 0.5, 0.1)
+    elif args.method == 'baseline':
+        model = BaselineModel()
 
     model.model.fc = torch.nn.Linear(model.model.fc.in_features, 7)
     criterion = nn.CrossEntropyLoss()
@@ -257,15 +261,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_domains', type=str)
     parser.add_argument('--test_domains', type=str)
-    parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle'])
+    parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle', 'baseline', 'conststyle-bn'])
     parser.add_argument('--num_epoch', type=int, default=50)
     parser.add_argument('--style_idx', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--wandb', type=int, default=1)
+    parser.add_argument('--option', type=str, default='v2')
     args = parser.parse_args()
     
     if args.wandb:
-        job_type = f'{args.method}'
+        job_type = f'{args.method}_{args.option}'
         tracker = wandb.init(
             project = 'CentralizedDG',
             entity = 'aiotlab',

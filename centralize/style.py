@@ -184,7 +184,7 @@ class ConstantStyle(nn.Module):
         self.const_mean = torch.mean(cluster_mean, axis=0)
         self.const_std = torch.mean(cluster_std, axis=0)
     
-    def cal_mean_std(self, idx, domain_id, args):
+    def cal_mean_std(self, idx, domain_id, args, epoch):
         domain_list = np.array(self.domain_list)
         idx_val = np.where(domain_list == domain_id)[0]
         cluster_mean = [self.mean[i] for i in idx_val]
@@ -193,15 +193,15 @@ class ConstantStyle(nn.Module):
         cluster_std = torch.stack(cluster_std)
         
         self.const_mean = torch.mean(cluster_mean, axis=0)
-        self.const_std = torch.mean(cluster_std, axis=0)
+        self.const_std = torch.sqrt(torch.mean(cluster_std ** 2, axis=0))
         
         args.tracker.log({
-            f'Mean_domain{domain_id}_{idx}': self.const_mean
-        })
+            f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
+        }, step=epoch)
         
         args.tracker.log({
-            f'Std_domain{domain_id}_{idx}': self.const_std
-        })
+            f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
+        }, step=epoch)
     
     def forward(self, x, test=False):
         mu = x.mean(dim=[2, 3], keepdim=True)
@@ -211,6 +211,10 @@ class ConstantStyle(nn.Module):
         x_normed = (x-mu) / sig
         const_mean = torch.reshape(self.const_mean, (1, self.const_mean.shape[0], 1, 1))
         const_std = torch.reshape(self.const_std, (1, self.const_std.shape[0], 1, 1))
+        
+        # const_mean += torch.randn_like(const_mean)
+        # const_std += torch.randn_like(const_std)
+        
         out = x_normed * const_std + const_mean
         return out
     
