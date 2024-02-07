@@ -6,7 +6,15 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE 
 from sklearn.cluster import DBSCAN, KMeans
 from sklearn.neighbors import NearestNeighbors
+from sklearn.mixture import BayesianGaussianMixture
+from sklearn.model_selection import GridSearchCV
 import numpy as np
+import os
+
+def gmm_bic_score(estimator, X):
+    """Callable to pass to GridSearchCV that will use the BIC score."""
+    # Make it negative since GridSearchCV expects a score to maximize
+    return -estimator.bic(X)
 
 class MixStyle(nn.Module):
     """MixStyle.
@@ -186,14 +194,77 @@ class ConstantStyle(nn.Module):
     
     def cal_mean_std(self, idx, domain_id, args, epoch):
         domain_list = np.array(self.domain_list)
-        idx_val = np.where(domain_list == domain_id)[0]
-        cluster_mean = [self.mean[i] for i in idx_val]
-        cluster_std = [self.std[i] for i in idx_val]
+        # idx_val = np.where(domain_list == domain_id)[0]
+        # cluster_mean = [self.mean[i] for i in idx_val]
+        # cluster_std = [self.std[i] for i in idx_val]
+        
+        #for plotting
+        plot_mean = [i.detach().cpu().numpy() for i in self.mean]
+        plot_std = [i.detach().cpu().numpy() for i in self.std]
+        
+        # import pdb
+        # pdb.set_trace()
+        #GMM clustering
+        mean_list = np.array(plot_mean)
+        std_list = np.array(plot_std)
+        
+        data_list = np.concatenate((mean_list, std_list), axis=1)
+        
+        param_grid = {
+            "n_components": 4,
+            "covariance_type": ["spherical", "tied", "diag", "full"],
+        }
+        
+        # grid_search = GridSearchCV(
+        #     BayesianGaussianMixture(), param_grid=param_grid, scoring=gmm_bic_score
+        # )
+        grid_search = BayesianGaussianMixture(n_components=4, covariance_type='full')
+        grid_search.fit(data_list)        
+        # print(f'Max covariants: {np.max(grid_search.best_estimator_.covariances_)}')
+        # for i, (mean, cov) in enumerate(zip(grid_search.best_estimator_.means_, grid_search.best_estimator_.covariances_)):
+        #     print(f'Mean and Cov of cluster {i}: {mean.shape} - {cov.shape}')    
+        
+        labels = grid_search.predict(data_list)
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        idx_val = unique_labels[np.argmax(counts)]
+        
+        cluster_mean = [self.mean[i] for i in labels if i == idx_val]
+        cluster_std = [self.std[i] for i in labels if i == idx_val]
+        
+        #for plotting
+        tsne = TSNE(n_components=1, random_state=42)
+        transformed_mean = tsne.fit_transform(np.array(plot_mean))
+
+        tsne2 = TSNE(n_components=1, random_state=42)
+        transformed_std = tsne2.fit_transform(np.array(plot_std))
+        plt.cla()
+        plt.clf()
+        # if args.test_domains == 'p':
+        #     classes = ['art', 'cartoon', 'sketch']
+        # elif args.test_domains == 'a':
+        #     classes = ['photo', 'cartoon', 'sketch']
+        # elif args.test_domains == 'c':
+        #     classes = ['photo', 'art', 'sketch']
+        # elif args.test_domains == 's':
+        #     classes = ['photo', 'art', 'cartoon']
+        
+        classes = []
+        for val in unique_labels:
+            classes.append(f'Cluster {val}')
+            
+        scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=labels)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'plot_cluster{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+
         cluster_mean = torch.stack(cluster_mean)
         cluster_std = torch.stack(cluster_std)
         
         self.const_mean = torch.mean(cluster_mean, axis=0)
         self.const_std = torch.sqrt(torch.mean(cluster_std ** 2, axis=0))
+        
+        # self.const_mean = torch.tensor(cluster_mean)
+        # self.const_std = torch.sqrt(torch.tensor(cluster_cov))
         
         args.tracker.log({
             f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()

@@ -13,6 +13,7 @@ import wandb
 from torch.utils.data import Subset, DataLoader, ConcatDataset, random_split
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
+from dataset import *
 
 from model import *
 
@@ -28,44 +29,6 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
     # Set a fixed value for the hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
-
-
-means, stds = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-transf = transforms.Compose([
-                            transforms.CenterCrop(224),  # Crops a central square patch of the image 224 because torchvision's AlexNet needs a 224x224 input!
-                            transforms.ToTensor(), # Turn PIL Image to torch.Tensor
-                            transforms.Normalize(means,stds) # Normalizes tensor with mean and standard deviation
-])
-
-def photo_transform(data):
-        transf_data = transf(data)
-        transf_data.domain_id = 1
-        return transf_data
-
-def art_transform(data):
-    transf_data = transf(data)
-    transf_data.domain_id = 2
-    return transf_data
-
-def cartoon_transform(data):
-    transf_data = transf(data)
-    transf_data.domain_id = 3
-    return transf_data
-
-def sketch_transform(data):
-    transf_data = transf(data)
-    transf_data.domain_id = 4
-    return transf_data
-
-dir_photo = '../data/pacs_v1.0/photo/'
-dir_art = '../data/pacs_v1.0/art_painting/'
-dir_cartoon = '../data/pacs_v1.0/cartoon/'
-dir_sketch = '../data/pacs_v1.0/sketch/'
-
-photo_dataset = ImageFolder(dir_photo, transform=photo_transform)
-art_dataset = ImageFolder(dir_art, transform=art_transform)
-cartoon_dataset = ImageFolder(dir_cartoon, transform=cartoon_transform)
-sketch_dataset = ImageFolder(dir_sketch, transform=sketch_transform)
 
 def train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer):
     model.to(device)
@@ -167,77 +130,141 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 'Max OD Accuracy': max_accuracy
             })
     if args.method == 'conststyle' or args.method == 'conststyle-bn':
-        save_path = f'results/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
+        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
 
     else:
-        save_path = f'results/{args.method}_{args.train_domains}_{args.test_domains}'
+        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}'
 
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
     with open(f'{save_path}/acc.csv', 'a') as f:
         csv_writer = csv.writer(f)
         csv_writer.writerow(['Acc', max_accuracy])
 
 
 def main(args):
-    if os.path.exists(f'results/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv'):
-        os.remove(f'results/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv')
+    if args.method == 'conststyle' or args.method == 'conststyle-bn':
+        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}'
 
+    else:
+        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}'
+        
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    
+    if args.method == 'conststyle' or args.method == 'conststyle-bn':
+        if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}/acc.csv'):
+            os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}/acc.csv')
+    else:
+        if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv'):
+            os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv')
+    
     train_dataset = []
     test_dataset = []
     len_dataset = []
     idx = 1
-    if 'p' in args.train_domains:
-        total_data = len(photo_dataset)
-        train_len = int(total_data * 0.8)
-        test_len = total_data - train_len
-        train_dataset_p, test_dataset_p = random_split(photo_dataset, [train_len, test_len])
-        train_dataset.append(train_dataset_p)
-        test_dataset.append(test_dataset_p)
-        len_dataset.append(torch.full((train_len, 1), idx))
-        idx += 1
-    if 'a' in args.train_domains:
-        total_data = len(art_dataset)
-        train_len = int(total_data * 0.8)
-        test_len = total_data - train_len
-        train_dataset_a, test_dataset_a = random_split(art_dataset, [train_len, test_len])
-        train_dataset.append(train_dataset_a)
-        test_dataset.append(test_dataset_a)
-        len_dataset.append(torch.full((train_len, 1), idx))
-        idx += 1
-    if 'c' in args.train_domains:
-        total_data = len(cartoon_dataset)
-        train_len = int(total_data * 0.8)
-        test_len = total_data - train_len
-        train_dataset_c, test_dataset_c = random_split(cartoon_dataset, [train_len, test_len])
-        train_dataset.append(train_dataset_c)
-        test_dataset.append(test_dataset_c)
-        len_dataset.append(torch.full((train_len, 1), idx))
-        idx += 1
-    if 's' in args.train_domains:
-        total_data = len(sketch_dataset)
-        train_len = int(total_data * 0.8)
-        test_len = total_data - train_len
-        train_dataset_s, test_dataset_s = random_split(sketch_dataset, [train_len, test_len])
-        train_dataset.append(train_dataset_s)
-        test_dataset.append(test_dataset_s)
-        len_dataset.append(torch.full((train_len, 1), idx))
-        idx += 1
+    
+    if args.dataset == 'pacs':
+        dataset_list = prepare_pacs(args)
+        if 'p' in args.train_domains:
+            total_data = len(dataset_list[0])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_p, test_dataset_p = random_split(dataset_list[0], [train_len, test_len])
+            train_dataset.append(train_dataset_p)
+            test_dataset.append(test_dataset_p)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 'a' in args.train_domains:
+            total_data = len(dataset_list[1])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_a, test_dataset_a = random_split(dataset_list[1], [train_len, test_len])
+            train_dataset.append(train_dataset_a)
+            test_dataset.append(test_dataset_a)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 'c' in args.train_domains:
+            total_data = len(dataset_list[2])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_c, test_dataset_c = random_split(dataset_list[2], [train_len, test_len])
+            train_dataset.append(train_dataset_c)
+            test_dataset.append(test_dataset_c)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 's' in args.train_domains:
+            total_data = len(dataset_list[3])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_s, test_dataset_s = random_split(dataset_list[3], [train_len, test_len])
+            train_dataset.append(train_dataset_s)
+            test_dataset.append(test_dataset_s)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        
+        if 'p' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=32, shuffle=False, num_workers=8)
+        elif 'a' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=32, shuffle=False, num_workers=8)
+        elif 'c' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=32, shuffle=False, num_workers=8)
+        elif 's' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=32, shuffle=False, num_workers=8)
+        
+    elif args.dataset == 'officehome':
+        dataset_list = prepare_officehome(args)
+        dataset_list = prepare_pacs(args)
+        if 'a' in args.train_domains:
+            total_data = len(dataset_list[0])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_p, test_dataset_p = random_split(dataset_list[0], [train_len, test_len])
+            train_dataset.append(train_dataset_p)
+            test_dataset.append(test_dataset_p)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 'c' in args.train_domains:
+            total_data = len(dataset_list[1])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_a, test_dataset_a = random_split(dataset_list[1], [train_len, test_len])
+            train_dataset.append(train_dataset_a)
+            test_dataset.append(test_dataset_a)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 'p' in args.train_domains:
+            total_data = len(dataset_list[2])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_c, test_dataset_c = random_split(dataset_list[2], [train_len, test_len])
+            train_dataset.append(train_dataset_c)
+            test_dataset.append(test_dataset_c)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        if 'r' in args.train_domains:
+            total_data = len(dataset_list[3])
+            train_len = int(total_data * 0.8)
+            test_len = total_data - train_len
+            train_dataset_s, test_dataset_s = random_split(dataset_list[3], [train_len, test_len])
+            train_dataset.append(train_dataset_s)
+            test_dataset.append(test_dataset_s)
+            len_dataset.append(torch.full((train_len, 1), idx))
+            idx += 1
+        
+        if 'a' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=32, shuffle=False, num_workers=8)
+        elif 'c' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=32, shuffle=False, num_workers=8)
+        elif 'p' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=32, shuffle=False, num_workers=8)
+        elif 'r' == args.test_domains:
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=32, shuffle=False, num_workers=8)
+    
         
     concated_train_dataset = ConcatDataset(train_dataset)
     concated_test_dataset = ConcatDataset(test_dataset)
     concated_train_domain = torch.vstack(len_dataset)
     train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=32, shuffle=True, num_workers=8)
     test_in_domain_loader = DataLoader(concated_test_dataset, batch_size=32, shuffle=False, num_workers=8)
-    
-    if 'p' == args.test_domains:
-        test_out_domain_loader = DataLoader(photo_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 'a' == args.test_domains:
-        test_out_domain_loader = DataLoader(art_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 'c' == args.test_domains:
-        test_out_domain_loader = DataLoader(cartoon_dataset, batch_size=32, shuffle=False, num_workers=8)
-    elif 's' == args.test_domains:
-        test_out_domain_loader = DataLoader(sketch_dataset, batch_size=32, shuffle=False, num_workers=8)
 
     if args.method == 'conststyle':
         model = ConstStyleModel()
@@ -252,7 +279,15 @@ def main(args):
     elif args.method == 'baseline':
         model = BaselineModel()
 
-    model.model.fc = torch.nn.Linear(model.model.fc.in_features, 7)
+    if args.dataset == 'pacs':
+        model.model.fc = torch.nn.Linear(model.model.fc.in_features, 7)
+    elif args.dataset == 'officehome':
+        model.model.fc = torch.nn.Sequential(
+            torch.nn.Linear(model.model.fc.in_features, 512),
+            torch.nn.ReLU(),
+            torch.nn.Linear(512, 65)
+            ) 
+
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.model.parameters(), lr=1e-4, weight_decay=1e-5)
     train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer)
@@ -262,20 +297,22 @@ if __name__ == "__main__":
     parser.add_argument('--train_domains', type=str)
     parser.add_argument('--test_domains', type=str)
     parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle', 'baseline', 'conststyle-bn'])
+    parser.add_argument('--dataset', type=str, choices=['pacs', 'officehome'])
     parser.add_argument('--num_epoch', type=int, default=50)
     parser.add_argument('--style_idx', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--wandb', type=int, default=1)
-    parser.add_argument('--option', type=str, default='v2')
+    parser.add_argument('--option', type=str, default='')
     args = parser.parse_args()
     
+    gr_name = 'PACS' if args.dataset == 'pacs' else 'OfficeHome'
     if args.wandb:
         job_type = f'{args.method}_{args.option}'
         tracker = wandb.init(
             project = 'CentralizedDG',
             entity = 'aiotlab',
             config = args,
-            group = f'PACS',
+            group = f'{gr_name}',
             name = f'train={args.train_domains}_test={args.test_domains}'+
                 f'_method={args.method}'+
                 f'_style={args.style_idx}',
