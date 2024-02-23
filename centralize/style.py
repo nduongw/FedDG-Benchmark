@@ -8,6 +8,7 @@ from sklearn.cluster import DBSCAN, KMeans
 from sklearn.neighbors import NearestNeighbors
 from sklearn.mixture import BayesianGaussianMixture
 from sklearn.model_selection import GridSearchCV
+import scipy.stats as st
 import numpy as np
 import os
 
@@ -136,11 +137,14 @@ class ConstantStyle(nn.Module):
         self.const_mean = None
         self.const_std = None
         self.domain_list = []
+        self.scaled_feats = []
+        self.factor = 1.0
     
     def clear_memory(self):
         self.mean = []
         self.std = []
         self.domain_list = []
+        self.scaled_feats = []
         
     def get_style(self, x):
         mu = x.mean(dim=[2, 3], keepdim=True)
@@ -155,6 +159,10 @@ class ConstantStyle(nn.Module):
         self.mean.extend(mu)
         self.std.extend(var)
         self.domain_list.extend([i.item() for i in domains])
+    
+    def reparameterize(self, mu, std):
+        epsilon = torch.randn_like(std) * self.factor
+        return mu + epsilon * std
     
     def clustering(self, round):
         mean = torch.vstack(self.mean)
@@ -211,23 +219,29 @@ class ConstantStyle(nn.Module):
         data_list = np.concatenate((mean_list, std_list), axis=1)
         
         param_grid = {
-            "n_components": 4,
+            "n_components": 3,
             "covariance_type": ["spherical", "tied", "diag", "full"],
         }
         
         # grid_search = GridSearchCV(
         #     BayesianGaussianMixture(), param_grid=param_grid, scoring=gmm_bic_score
         # )
-        grid_search = BayesianGaussianMixture(n_components=4, covariance_type='full')
-        grid_search.fit(data_list)        
-        # print(f'Max covariants: {np.max(grid_search.best_estimator_.covariances_)}')
-        # for i, (mean, cov) in enumerate(zip(grid_search.best_estimator_.means_, grid_search.best_estimator_.covariances_)):
-        #     print(f'Mean and Cov of cluster {i}: {mean.shape} - {cov.shape}')    
+        grid_search = BayesianGaussianMixture(n_components=3, covariance_type='full')
+        grid_search.fit(data_list)
         
         labels = grid_search.predict(data_list)
-        unique_labels, counts = np.unique(labels, return_counts=True)
-        idx_val = unique_labels[np.argmax(counts)]
+        unique_labels, _ = np.unique(labels, return_counts=True)
+        # idx_val = unique_labels[np.argmax(counts)] #idx_val is index of the largest cluster
         
+        #get index of cluster which has largest variant
+        std_list = []
+        for val in unique_labels:
+            std_val = torch.stack([self.std[i] for i in labels if i == val])
+            std_val = torch.sqrt(torch.mean(std_val ** 2, axis=0))
+            std_list.append(sum(std_val).detach().cpu().item())
+
+        idx_val = np.argmax(std_list)
+        print(f'Layer {idx} chooses cluster {idx_val}')
         cluster_mean = [self.mean[i] for i in labels if i == idx_val]
         cluster_std = [self.std[i] for i in labels if i == idx_val]
         
@@ -237,17 +251,11 @@ class ConstantStyle(nn.Module):
 
         tsne2 = TSNE(n_components=1, random_state=42)
         transformed_std = tsne2.fit_transform(np.array(plot_std))
+        
+        #plot clusters
+        plt.close()
         plt.cla()
         plt.clf()
-        # if args.test_domains == 'p':
-        #     classes = ['art', 'cartoon', 'sketch']
-        # elif args.test_domains == 'a':
-        #     classes = ['photo', 'cartoon', 'sketch']
-        # elif args.test_domains == 'c':
-        #     classes = ['photo', 'art', 'sketch']
-        # elif args.test_domains == 's':
-        #     classes = ['photo', 'art', 'cartoon']
-        
         classes = []
         for val in unique_labels:
             classes.append(f'Cluster {val}')
@@ -256,15 +264,28 @@ class ConstantStyle(nn.Module):
         plt.legend(handles=scatter.legend_elements()[0], labels=classes)
         save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'plot_cluster{idx}_epoch{epoch}.png')
         plt.savefig(save_path, dpi=200)
+        
+        #plot features
+        plt.cla()
+        plt.clf()
+        if args.test_domains == 'p':
+            classes = ['art', 'cartoon', 'sketch']
+        elif args.test_domains == 'a':
+            classes = ['photo', 'cartoon', 'sketch']
+        elif args.test_domains == 'c':
+            classes = ['photo', 'art', 'sketch']
+        elif args.test_domains == 's':
+            classes = ['photo', 'art', 'cartoon']
+        scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=domain_list)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'features{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
 
         cluster_mean = torch.stack(cluster_mean)
         cluster_std = torch.stack(cluster_std)
         
         self.const_mean = torch.mean(cluster_mean, axis=0)
-        self.const_std = torch.sqrt(torch.mean(cluster_std ** 2, axis=0))
-        
-        # self.const_mean = torch.tensor(cluster_mean)
-        # self.const_std = torch.sqrt(torch.tensor(cluster_cov))
+        self.const_std = torch.sqrt(torch.mean(cluster_std ** 2, axis=0) / len(cluster_std))
         
         args.tracker.log({
             f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
@@ -274,7 +295,151 @@ class ConstantStyle(nn.Module):
             f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
         }, step=epoch)
     
-    def forward(self, x, test=False):
+    def cal_mean_std_ver2(self, idx, domain_id, args, epoch):
+        domain_list = np.array(self.domain_list)
+        
+        plot_mean = [i.detach().cpu().numpy() for i in self.mean]
+        plot_std = [i.detach().cpu().numpy() for i in self.std]
+        
+        mean_list = np.array(plot_mean)
+        std_list = np.array(plot_std)
+        
+        cluster_mean = BayesianGaussianMixture(n_components=3, covariance_type='tied')
+        cluster_std = BayesianGaussianMixture(n_components=3, covariance_type='tied', max_iter=500)
+        cluster_mean.fit(mean_list)
+        cluster_std.fit(std_list)
+        
+        labels_mean = cluster_mean.predict(mean_list)
+        labels_std = cluster_mean.predict(std_list)
+        
+        unique_labels_mean, _ = np.unique(labels_mean, return_counts=True)
+        unique_labels_std, _ = np.unique(labels_std, return_counts=True)
+        
+        #get index of cluster which has largest variant
+        std_list_mean = []
+        for val in unique_labels_mean:
+            std_mean = torch.stack([self.mean[i] for i in labels_mean if i == val])
+            std_mean = torch.sqrt(torch.mean(std_mean ** 2, axis=0))
+            std_list_mean.append(sum(std_mean).detach().cpu().item())
+
+        idx_val_mean = np.argmax(std_list_mean)
+        print(f'Layer {idx} chooses cluster {idx_val_mean} for mean')
+        
+        std_list_std = []
+        for val in unique_labels_std:
+            std_std = torch.stack([self.std[i] for i in labels_std if i == val])
+            std_std = torch.sqrt(torch.mean(std_std ** 2, axis=0))
+            std_list_std.append(sum(std_std).detach().cpu().item())
+
+        idx_val_std = np.argmax(std_list_std)
+        print(f'Layer {idx} chooses cluster {idx_val_std} for std')
+        
+        cluster_mean = [self.mean[i] for i in labels_mean if i == idx_val_mean]
+        cluster_std = [self.std[i] for i in labels_std if i == idx_val_std]
+        
+        tsne = TSNE(n_components=2, random_state=42)
+        transformed_mean = tsne.fit_transform(np.array(plot_mean))
+
+        tsne2 = TSNE(n_components=2, random_state=42)
+        transformed_std = tsne2.fit_transform(np.array(plot_std))
+        
+        #plot clusters
+        plt.close()
+        plt.cla()
+        plt.clf()
+        classes_mean = []
+        for val in unique_labels_mean:
+            classes_mean.append(f'Cluster mean {val}')
+            
+        scatter = plt.scatter(transformed_mean[:, 0], transformed_mean[:, 1], c=labels_mean)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes_mean)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'cluster_mean{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+        
+        plt.close()
+        plt.cla()
+        plt.clf()
+        
+        classes_std = []
+        for val in unique_labels_mean:
+            classes_std.append(f'Cluster std {val}')
+        
+        scatter = plt.scatter(transformed_std[:, 0], transformed_std[:, 1], c=labels_std)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes_std)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'cluster_std{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+        
+        plt.close()
+        plt.cla()
+        plt.clf()
+        tsne3 = TSNE(n_components=1, random_state=42)
+        transformed_mean = tsne3.fit_transform(np.array(plot_mean))
+
+        tsne4 = TSNE(n_components=1, random_state=42)
+        transformed_std = tsne4.fit_transform(np.array(plot_std))
+        
+        if args.test_domains == 'p':
+            classes = ['art', 'cartoon', 'sketch']
+        elif args.test_domains == 'a':
+            classes = ['photo', 'cartoon', 'sketch']
+        elif args.test_domains == 'c':
+            classes = ['photo', 'art', 'sketch']
+        elif args.test_domains == 's':
+            classes = ['photo', 'art', 'cartoon']
+        
+        scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=domain_list)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'features_mean{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+        
+        # import pdb
+        # pdb.set_trace()
+        cluster_mean = torch.stack(cluster_mean)
+        cluster_std = torch.stack(cluster_std)
+        
+        self.const_mean = torch.mean(cluster_mean, axis=0)
+        self.const_std = torch.mean(cluster_std, axis=0)
+        
+        args.tracker.log({
+            f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
+        }, step=epoch)
+        
+        args.tracker.log({
+            f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
+        }, step=epoch)
+    
+    def plot_data_features(self, args, idx, epoch):
+        domain_list = np.array(self.domain_list)
+
+        scaled_feats = np.array(self.scaled_feats)
+        mu = scaled_feats.mean(axis=(2, 3), keepdims=True)
+        var = scaled_feats.var(axis=(2, 3), keepdims=True)
+        var = np.sqrt(var)
+
+        tsne3 = TSNE(n_components=1, random_state=42)
+        transformed_mean = tsne3.fit_transform(np.squeeze(mu))
+
+        tsne4 = TSNE(n_components=1, random_state=42)
+        transformed_std = tsne4.fit_transform(np.squeeze(var))
+        if args.test_domains == 'p':
+            classes = ['art', 'cartoon', 'sketch', 'photo']
+        elif args.test_domains == 'a':
+            classes = ['photo', 'cartoon', 'sketch', 'art']
+        elif args.test_domains == 'c':
+            classes = ['photo', 'art', 'sketch', 'cartoon']
+        elif args.test_domains == 's':
+            classes = ['photo', 'art', 'cartoon', 'sketch']
+    
+        scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=domain_list)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}', f'style{idx}_features_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+        plt.close()
+        plt.cla()
+        plt.clf()
+        
+    
+    def forward(self, x, store_style, sampling=False):
         mu = x.mean(dim=[2, 3], keepdim=True)
         var = x.var(dim=[2, 3], keepdim=True)
         sig = (var + self.eps).sqrt()
@@ -282,11 +447,22 @@ class ConstantStyle(nn.Module):
         x_normed = (x-mu) / sig
         const_mean = torch.reshape(self.const_mean, (1, self.const_mean.shape[0], 1, 1))
         const_std = torch.reshape(self.const_std, (1, self.const_std.shape[0], 1, 1))
-        
-        # const_mean += torch.randn_like(const_mean)
-        # const_std += torch.randn_like(const_std)
-        
+    
         out = x_normed * const_std + const_mean
+        
+        if sampling:
+            #create generator to get value from normal distribution 
+            gaussian_generator = torch.distributions.Normal(loc=self.const_mean, scale=self.const_std)
+            sample = gaussian_generator.sample()
+            sample = torch.reshape(sample, (1, sample.shape[0], 1, 1))
+            mu = out.mean(dim=[2, 3], keepdim=True)
+            # import pdb
+            # pdb.set_trace()
+            diff = sample - mu
+            out = self.reparameterize(out, diff)  
+        if store_style:
+            self.scaled_feats.extend([i.detach().cpu().numpy() for i in out])
+
         return out
     
 class CorrelatedDistributionUncertainty(nn.Module):

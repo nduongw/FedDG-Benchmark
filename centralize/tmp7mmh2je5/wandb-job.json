@@ -1,0 +1,59 @@
+{
+    "_version": "v0",
+    "source_type": "repo",
+    "source": {
+        "git": {
+            "remote": "https://github.com/nduongw/FedDG-Benchmark.git",
+            "commit": "9ff532399181efc1acd84c2e30e586eab09098d2"
+        },
+        "entrypoint": [
+            "python",
+            "centralize/main.py"
+        ],
+        "notebook": false
+    },
+    "input_types": {
+        "wb_type": "typedDict",
+        "params": {
+            "type_map": {
+                "train_domains": {
+                    "wb_type": "string"
+                },
+                "test_domains": {
+                    "wb_type": "string"
+                },
+                "method": {
+                    "wb_type": "string"
+                },
+                "dataset": {
+                    "wb_type": "string"
+                },
+                "num_epoch": {
+                    "wb_type": "number"
+                },
+                "style_idx": {
+                    "wb_type": "none"
+                },
+                "seed": {
+                    "wb_type": "number"
+                },
+                "wandb": {
+                    "wb_type": "number"
+                },
+                "update_interval": {
+                    "wb_type": "number"
+                },
+                "option": {
+                    "wb_type": "string"
+                }
+            }
+        }
+    },
+    "output_types": {
+        "wb_type": "typedDict",
+        "params": {
+            "type_map": {}
+        }
+    },
+    "runtime": "3.9.18"
+}

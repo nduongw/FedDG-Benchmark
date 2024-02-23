@@ -61,13 +61,22 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
 
             loss.backward()
             optimizer.step()
+            running_loss += loss.item()
+            
+            #training more using sampling features
+            if epoch > 1:
+                optimizer.zero_grad()
+                outputs = model(inputs, domains, const_style=True, store_style=True, sampling=True)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
 
             running_loss += loss.item()
 
         if args.method == 'conststyle' or args.method == 'conststyle-bn':
-            if epoch % 10 == 0:
+            if epoch % args.update_interval == 0:
                 for idx, conststyle in enumerate(model.conststyle):
-                    conststyle.cal_mean_std(idx, style_idx, args, epoch)
+                    conststyle.cal_mean_std_ver2(idx, style_idx, args, epoch)
 
         print(f"Epoch {epoch+1}/{args.num_epoch}, Train Loss: {running_loss/len(train_loader)}")
 
@@ -76,12 +85,16 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
         total_samples = 0
 
         with torch.no_grad():
+            print(f'Test in-domain data')
             for inputs, labels in test_in_domain_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
 
                 # Forward pass
                 if args.method == 'conststyle' or args.method == 'conststyle-bn':
-                    outputs = model(inputs, domains, const_style=True, test=True)
+                    if epoch == 0:
+                        outputs = model(inputs, domains)
+                    else:
+                        outputs = model(inputs, domains, const_style=True)
                 else:
                     outputs = model(inputs)
 
@@ -101,12 +114,17 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             correct_predictions = 0
             total_samples = 0
             
+            print(f'Test out-of-domain data')
             for inputs, labels in test_out_domain_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
 
                 # Forward pass
                 if args.method == 'conststyle' or args.method == 'conststyle-bn':
-                    outputs = model(inputs, domains, const_style=True, test=True)
+                    if epoch > 0:
+                        domains = torch.full((len(labels), 1), 4)
+                        outputs = model(inputs, domains, const_style=True, store_style=True)
+                    else:
+                        outputs = model(inputs, domains)
                 else:
                     outputs = model(inputs)
 
@@ -124,6 +142,9 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             args.tracker.log({
                 'OD Accuracy': test_accuracy
             }, step=epoch)
+            
+            if epoch > 0:
+                model.plot_data_features(args, epoch)
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
     args.tracker.log({
@@ -302,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument('--style_idx', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--wandb', type=int, default=1)
+    parser.add_argument('--update_interval', type=int, default=10)
     parser.add_argument('--option', type=str, default='')
     args = parser.parse_args()
     

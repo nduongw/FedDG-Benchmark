@@ -57,7 +57,11 @@ class ConstStyleModel2(nn.Module):
         self.const_mean = None
         self.const_std = None
     
-    def forward(self, x, domains, const_style=False, store_style=False, test=False):
+    def plot_data_features(self, args, epoch):
+        for idx, style in enumerate(self.conststyle):
+            style.plot_data_features(args, idx, epoch)
+    
+    def forward(self, x, domains, const_style=False, store_style=False, sampling=False):
         x = self.model.conv1(x)
         x = self.model.bn1(x)
         x = self.model.relu(x)
@@ -67,12 +71,12 @@ class ConstStyleModel2(nn.Module):
         if store_style:
             self.conststyle[0].store_style(x, domains)
         if const_style:
-            x = self.conststyle[0](x, test=test)
+            x = self.conststyle[0](x, store_style, sampling=sampling)
         x = self.model.layer2(x)
         if store_style:
             self.conststyle[1].store_style(x, domains)
         if const_style:
-            x = self.conststyle[1](x, test=test)
+            x = self.conststyle[1](x, store_style, sampling=sampling)
         x = self.model.layer3(x)
         x = self.model.layer4(x)
 
