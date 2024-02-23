@@ -136,6 +136,8 @@ class ConstantStyle(nn.Module):
         self.eps = eps
         self.const_mean = None
         self.const_std = None
+        self.const_mean_std = None
+        self.const_std_std = None
         self.domain_list = []
         self.scaled_feats = []
         self.factor = 1.0
@@ -202,21 +204,21 @@ class ConstantStyle(nn.Module):
     
     def cal_mean_std(self, idx, domain_id, args, epoch):
         domain_list = np.array(self.domain_list)
-        # idx_val = np.where(domain_list == domain_id)[0]
-        # cluster_mean = [self.mean[i] for i in idx_val]
-        # cluster_std = [self.std[i] for i in idx_val]
         
         #for plotting
         plot_mean = [i.detach().cpu().numpy() for i in self.mean]
         plot_std = [i.detach().cpu().numpy() for i in self.std]
-        
-        # import pdb
-        # pdb.set_trace()
         #GMM clustering
         mean_list = np.array(plot_mean)
         std_list = np.array(plot_std)
         
-        data_list = np.concatenate((mean_list, std_list), axis=1)
+        stacked_data = np.vstack((mean_list, std_list))
+        reshaped_data = stacked_data.reshape((len(plot_mean), 2, -1))
+        
+        mean = np.mean(reshaped_data, axis=(1, 2))
+        std = np.std(reshaped_data, axis=(1, 2))
+        
+        data_list = np.concatenate((mean, std), axis=1)
         
         param_grid = {
             "n_components": 3,
@@ -231,7 +233,6 @@ class ConstantStyle(nn.Module):
         
         labels = grid_search.predict(data_list)
         unique_labels, _ = np.unique(labels, return_counts=True)
-        # idx_val = unique_labels[np.argmax(counts)] #idx_val is index of the largest cluster
         
         #get index of cluster which has largest variant
         std_list = []
@@ -241,9 +242,9 @@ class ConstantStyle(nn.Module):
             std_list.append(sum(std_val).detach().cpu().item())
 
         idx_val = np.argmax(std_list)
-        print(f'Layer {idx} chooses cluster {idx_val}')
-        cluster_mean = [self.mean[i] for i in labels if i == idx_val]
-        cluster_std = [self.std[i] for i in labels if i == idx_val]
+        print(f'Layer {idx} chooses cluster {unique_labels[idx_val]}')
+        cluster_mean = [self.mean[i] for i in labels if i == unique_labels[idx_val]]
+        cluster_std = [self.std[i] for i in labels if i == unique_labels[idx_val]]
         
         #for plotting
         tsne = TSNE(n_components=1, random_state=42)
@@ -304,8 +305,8 @@ class ConstantStyle(nn.Module):
         mean_list = np.array(plot_mean)
         std_list = np.array(plot_std)
         
-        cluster_mean = BayesianGaussianMixture(n_components=3, covariance_type='tied')
-        cluster_std = BayesianGaussianMixture(n_components=3, covariance_type='tied', max_iter=500)
+        cluster_mean = BayesianGaussianMixture(n_components=3, covariance_type='tied', init_params='k-means++')
+        cluster_std = BayesianGaussianMixture(n_components=3, covariance_type='tied', init_params='k-means++')
         cluster_mean.fit(mean_list)
         cluster_std.fit(std_list)
         
@@ -334,8 +335,8 @@ class ConstantStyle(nn.Module):
         idx_val_std = np.argmax(std_list_std)
         print(f'Layer {idx} chooses cluster {idx_val_std} for std')
         
-        cluster_mean = [self.mean[i] for i in labels_mean if i == idx_val_mean]
-        cluster_std = [self.std[i] for i in labels_std if i == idx_val_std]
+        cluster_mean = [self.mean[i] for i in labels_mean if i == unique_labels_mean[idx_val_mean]]
+        cluster_std = [self.std[i] for i in labels_std if i == unique_labels_std[idx_val_std]]
         
         tsne = TSNE(n_components=2, random_state=42)
         transformed_mean = tsne.fit_transform(np.array(plot_mean))
@@ -398,15 +399,18 @@ class ConstantStyle(nn.Module):
         cluster_std = torch.stack(cluster_std)
         
         self.const_mean = torch.mean(cluster_mean, axis=0)
+        self.const_mean_std = torch.cov(cluster_mean)
         self.const_std = torch.mean(cluster_std, axis=0)
+        self.const_std_std = torch.cov(cluster_std)
         
-        args.tracker.log({
-            f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
-        }, step=epoch)
-        
-        args.tracker.log({
-            f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
-        }, step=epoch)
+        if args.wandb:
+            args.tracker.log({
+                f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
+            }, step=epoch)
+            
+            args.tracker.log({
+                f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
+            }, step=epoch)
     
     def plot_data_features(self, args, idx, epoch):
         domain_list = np.array(self.domain_list)
@@ -452,14 +456,14 @@ class ConstantStyle(nn.Module):
         
         if sampling:
             #create generator to get value from normal distribution 
-            gaussian_generator = torch.distributions.Normal(loc=self.const_mean, scale=self.const_std)
-            sample = gaussian_generator.sample()
-            sample = torch.reshape(sample, (1, sample.shape[0], 1, 1))
-            mu = out.mean(dim=[2, 3], keepdim=True)
-            # import pdb
-            # pdb.set_trace()
-            diff = sample - mu
-            out = self.reparameterize(out, diff)  
+            gaussian_generator_mean = torch.distributions.MultivariateNormal(loc=self.const_mean, covariance_matrix=self.const_mean_std)
+            gaussian_generator_std = torch.distributions.MultivariateNormal(loc=self.const_std, covariance_matrix=self.const_std_std)
+            sample_mean = gaussian_generator_mean.sample()
+            sample_std = gaussian_generator_std.sample()
+            sample_mean = torch.reshape(sample_mean, (1, sample_mean.shape[0], 1, 1))
+            sample_std = torch.reshape(sample_std, (1, sample_std.shape[0], 1, 1))
+            
+            out = x_normed * sample_std + sample_mean
         if store_style:
             self.scaled_feats.extend([i.detach().cpu().numpy() for i in out])
 

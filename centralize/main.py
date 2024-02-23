@@ -105,11 +105,11 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
 
             # Calculate test accuracy
             test_accuracy = correct_predictions / total_samples
-
             print(f"ID Accuracy: {test_accuracy * 100:.2f}%")
-            args.tracker.log({
-                'ID Accuracy': test_accuracy
-            }, step=epoch)
+            if args.wandb:
+                args.tracker.log({
+                    'ID Accuracy': test_accuracy
+                }, step=epoch)
             
             correct_predictions = 0
             total_samples = 0
@@ -139,17 +139,19 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 max_accuracy = test_accuracy
 
             print(f"OD Accuracy: {test_accuracy * 100:.2f}%")
-            args.tracker.log({
-                'OD Accuracy': test_accuracy
-            }, step=epoch)
+            if args.wandb:
+                args.tracker.log({
+                    'OD Accuracy': test_accuracy
+                }, step=epoch)
             
             if epoch > 0:
                 model.plot_data_features(args, epoch)
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
-    args.tracker.log({
-                'Max OD Accuracy': max_accuracy
-            })
+    if args.wandb:
+        args.tracker.log({
+                    'Max OD Accuracy': max_accuracy
+                })
     if args.method == 'conststyle' or args.method == 'conststyle-bn':
         save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
 
