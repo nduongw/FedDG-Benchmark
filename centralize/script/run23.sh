@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=0 python main.py --train_domains pac --test_domains s --method conststyle-bn --num_epoch 200 --dataset pacs --option VGMM_2gaussian --update_interval 10
+CUDA_VISIBLE_DEVICES=0 python main.py --train_domains pac --test_domains s --method conststyle-bn --num_epoch 200 --dataset pacs --option VGMM-augment --update_interval 10 --wandb 0 --seed 1

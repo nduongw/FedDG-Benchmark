@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import random
-import matplotlib.pyplot as plt
 import numpy as np
 import argparse
 import os
@@ -14,11 +13,11 @@ from torch.utils.data import Subset, DataLoader, ConcatDataset, random_split
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
 from dataset import *
-
+from style import *
 from model import *
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-# seed = 42
+
 def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
@@ -40,6 +39,14 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
         if args.method == 'conststyle' or args.method == 'conststyle-bn':
             for conststyle in model.conststyle:
                 conststyle.clear_memory()
+        elif args.method == 'mixstyle':
+            model.mixstyle.clear_memory()
+        elif args.method == 'dsu':
+            model.pertubration1.clear_memory()
+            model.pertubration2.clear_memory()
+        elif args.method == 'csu':
+            model.pertubration1.clear_memory()
+            model.pertubration2.clear_memory()
 
         model.train()
         running_loss = 0.0
@@ -55,7 +62,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 else:
                     outputs = model(inputs, domains, const_style=True, store_style=True)
             else:
-                outputs = model(inputs)
+                outputs = model(inputs, domains=domains, store_feats=True)
 
             loss = criterion(outputs, labels)
 
@@ -64,19 +71,20 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             running_loss += loss.item()
             
             #training more using sampling features
-            if epoch > 1:
-                optimizer.zero_grad()
-                outputs = model(inputs, domains, const_style=True, store_style=True, sampling=True)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
+            if args.method == 'conststyle' or args.method == 'conststyle-bn':
+                if epoch > 0:
+                    optimizer.zero_grad()
+                    outputs = model(inputs, domains, const_style=True, store_style=True, sampling=True)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
 
             running_loss += loss.item()
 
         if args.method == 'conststyle' or args.method == 'conststyle-bn':
             if epoch % args.update_interval == 0:
                 for idx, conststyle in enumerate(model.conststyle):
-                    conststyle.cal_mean_std_ver2(idx, style_idx, args, epoch)
+                    conststyle.cal_mean_std(idx, style_idx, args, epoch)
 
         print(f"Epoch {epoch+1}/{args.num_epoch}, Train Loss: {running_loss/len(train_loader)}")
 
@@ -96,7 +104,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                     else:
                         outputs = model(inputs, domains, const_style=True)
                 else:
-                    outputs = model(inputs)
+                    outputs = model(inputs, domains)
 
                 # Calculate accuracy
                 _, predicted = torch.max(outputs, 1)
@@ -126,7 +134,8 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                     else:
                         outputs = model(inputs, domains)
                 else:
-                    outputs = model(inputs)
+                    domains = torch.full((len(labels), 1), 4)
+                    outputs = model(inputs, domains, store_feats=True)
 
                 # Calculate accuracy
                 _, predicted = torch.max(outputs, 1)
@@ -144,41 +153,28 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                     'OD Accuracy': test_accuracy
                 }, step=epoch)
             
-            if epoch > 0:
-                model.plot_data_features(args, epoch)
+        if epoch > 0:
+            model.plot_style(args, epoch)
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
     if args.wandb:
         args.tracker.log({
                     'Max OD Accuracy': max_accuracy
                 })
-    if args.method == 'conststyle' or args.method == 'conststyle-bn':
-        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{style_idx}'
 
-    else:
-        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}'
+    save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}'
 
     with open(f'{save_path}/acc.csv', 'a') as f:
         csv_writer = csv.writer(f)
         csv_writer.writerow(['Acc', max_accuracy])
 
-
 def main(args):
-    if args.method == 'conststyle' or args.method == 'conststyle-bn':
-        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}'
-
-    else:
-        save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}'
-        
+    save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     
-    if args.method == 'conststyle' or args.method == 'conststyle-bn':
-        if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}/acc.csv'):
-            os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.style_idx}/acc.csv')
-    else:
-        if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv'):
-            os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}/acc.csv')
+    if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}/acc.csv'):
+        os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}/acc.csv')
     
     train_dataset = []
     test_dataset = []
