@@ -21,15 +21,21 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def set_seed(seed):
     np.random.seed(seed)
-    np.random.RandomState.seed(seed)
+    np.random.RandomState(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # When running on the CuDNN backend, two further options must be set
+    torch.use_deterministic_algorithms(True)
+    torch.mps.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     # Set a fixed value for the hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
+
+def seed_worker(worker_id):
+    worker_seed = 42
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 def train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer):
     model.to(device)
@@ -228,13 +234,13 @@ def main(args):
             idx += 1
         
         if 'p' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 'a' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 'c' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 's' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         
     elif args.dataset == 'officehome':
         dataset_list = prepare_officehome(args)
@@ -277,20 +283,20 @@ def main(args):
             idx += 1
         
         if 'a' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 'c' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 'p' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
         elif 'r' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
     
         
     concated_train_dataset = ConcatDataset(train_dataset)
     concated_test_dataset = ConcatDataset(test_dataset)
     concated_train_domain = torch.vstack(len_dataset)
-    train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=64, shuffle=True, num_workers=8)
-    test_in_domain_loader = DataLoader(concated_test_dataset, batch_size=64, shuffle=False, num_workers=8)
+    train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=64, shuffle=True, num_workers=8, worker_init_fn=seed_worker)
+    test_in_domain_loader = DataLoader(concated_test_dataset, batch_size=64, shuffle=False, num_workers=8, worker_init_fn=seed_worker)
 
     if args.method == 'conststyle':
         model = ConstStyleModel()
