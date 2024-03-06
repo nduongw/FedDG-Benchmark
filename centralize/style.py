@@ -4,17 +4,19 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE 
-from sklearn.cluster import DBSCAN, KMeans
+from sklearn.decomposition import PCA
 from sklearn.neighbors import KernelDensity
 from sklearn.mixture import BayesianGaussianMixture
 from sklearn.model_selection import GridSearchCV
 import scipy.stats as st
+from scipy.stats import multivariate_normal
 import numpy as np
+import copy
 import os
+import math
 
 def gmm_bic_score(estimator, X):
     """Callable to pass to GridSearchCV that will use the BIC score."""
-    # Make it negative since GridSearchCV expects a score to maximize
     return -estimator.bic(X)
 
 class MixStyle(nn.Module):
@@ -228,8 +230,7 @@ class ConstantStyle(nn.Module):
         self.eps = eps
         self.const_mean = None
         self.const_std = None
-        self.const_mean_std = None
-        self.const_std_std = None
+        self.const_cov = None
         self.domain_list = []
         self.scaled_feats = []
         self.factor = 1.0
@@ -244,7 +245,7 @@ class ConstantStyle(nn.Module):
         mu = x.mean(dim=[2, 3], keepdim=True)
         var = x.var(dim=[2, 3], keepdim=True)
         var = var.sqrt()
-        mu, var = mu.detach().squeeze(), var.detach().squeeze()
+        mu, var = mu.detach().squeeze().cpu().numpy(), var.detach().squeeze().cpu().numpy()
         
         return mu, var
     
@@ -263,45 +264,62 @@ class ConstantStyle(nn.Module):
         t = t.repeat(x.shape[0], 1)
         return t
     
-    def cal_mean_std(self, idx, domain_id, args, epoch):
+    def cal_mean_std(self, idx, args, epoch):
         domain_list = np.array(self.domain_list)
-        
-        #for plotting
-        plot_mean = [i.detach().cpu().numpy() for i in self.mean]
-        plot_std = [i.detach().cpu().numpy() for i in self.std]
-        tsne = TSNE(n_components=1, random_state=42)
-        transformed_mean = tsne.fit_transform(np.array(plot_mean))
-        tsne2 = TSNE(n_components=1, random_state=42)
-        transformed_std = tsne2.fit_transform(np.array(plot_std))    
-        
-        #GMM clustering
-        mean_list = np.array(plot_mean)
-        std_list = np.array(plot_std)
-        stacked_data = np.vstack((mean_list, std_list))
-        reshaped_data = stacked_data.reshape((len(plot_mean), 2, -1))
-
-        mean = np.mean(reshaped_data, axis=(1, 2))
-        std = np.std(reshaped_data, axis=(1, 2))
-        data_list = np.stack((mean, std), axis=1)
+        #clustering
+        mean_list = copy.copy(self.mean)
+        std_list = copy.copy(self.std)
+        mean_list = np.array(mean_list)
+        std_list = np.array(std_list)
+        stacked_data = np.stack((mean_list, std_list), axis=1)
+        reshaped_data = stacked_data.reshape((len(mean_list), -1))
+        # pca = PCA(n_components=32)
+        # pca_data = pca.fit_transform(reshaped_data)
+        pca_data = reshaped_data
+        # param_grid = {
+        #     "n_components": range(1, 7),
+        #     "covariance_type": ["full"],
+        # }
+        # bayes_cluster = GridSearchCV(
+        #     GaussianMixture(init_params='k-means++'), param_grid=param_grid, scoring=gmm_bic_score
+        # )
 
         bayes_cluster = BayesianGaussianMixture(n_components=3, covariance_type='full')
-        bayes_cluster.fit(data_list)
+        bayes_cluster.fit(pca_data)
         
-        labels = bayes_cluster.predict(data_list)
-        unique_labels, _ = np.unique(labels, return_counts=True)
+        labels = bayes_cluster.predict(pca_data)
+        unique_labels, counts = np.unique(labels, return_counts=True)
         
-        #get index of cluster which has largest variant
-        std_list = []
+        cluster_samples = []
+        cluster_samples_idx = []
         for val in unique_labels:
-            std_val = torch.stack([self.std[i] for i in labels if i == val])
-            std_val = torch.sqrt(torch.mean(std_val ** 2, axis=0))
-            std_list.append(sum(std_val).detach().cpu().item())
-
-        idx_val = np.argmax(std_list)
-        print(f'Layer {idx} chooses cluster {unique_labels[idx_val]}')
-        cluster_mean = [self.mean[i] for i in labels if i == unique_labels[idx_val]]
-        cluster_std = [self.std[i] for i in labels if i == unique_labels[idx_val]]
+            print(f'Get samples belong to cluster {val}')
+            samples = [reshaped_data[i] for i in range(len(labels)) if labels[i] == val]
+            samples_idx = [i for i in range(len(labels)) if labels[i] == val]
+            samples = np.stack(samples)
+            print(f'Cluster {val} has {len(samples)} samples')
+            cluster_samples.append(samples)
+            cluster_samples_idx.append(samples_idx)
         
+        log_likelihood_score = []
+        for cluster_idx, cluster_sample_idx in enumerate(cluster_samples_idx):
+            cluster_sample = [pca_data[i] for i in cluster_sample_idx]
+            sample_score = bayes_cluster.score_samples(cluster_sample)
+            mean_score = np.mean(sample_score)
+            print(f'Mean log likelihood of cluster {cluster_idx} is {mean_score}')
+            log_likelihood_score.append(mean_score)
+
+        idx_val = np.argmax(log_likelihood_score)
+        print(f'Layer {idx} chooses cluster {unique_labels[idx_val]} with log likelihood score {log_likelihood_score[idx_val]}')
+        
+        # import pdb
+        # pdb.set_trace()
+        self.const_mean = torch.from_numpy(bayes_cluster.means_[idx_val])
+        # s_test = np.vstack([reshaped_data[i] for i in range(len(labels)) if labels[i] == idx_val])
+        # self.const_mean = torch.from_numpy(np.mean(s_test, axis=0)).double()
+        # self.const_cov = torch.from_numpy(np.cov(s_test, rowvar=False)).double()
+        self.const_cov = torch.from_numpy(bayes_cluster.covariances_[idx_val])
+
         #plot features
         if args.test_domains == 'p':
             classes = ['art', 'cartoon', 'sketch']
@@ -311,27 +329,34 @@ class ConstantStyle(nn.Module):
             classes = ['photo', 'art', 'sketch']
         elif args.test_domains == 's':
             classes = ['photo', 'art', 'cartoon']
-        scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=domain_list)
+        
+        tsne = TSNE(n_components=2, random_state=42)
+        plot_data = tsne.fit_transform(reshaped_data)
+        
+        scatter = plt.scatter(plot_data[:, 0], plot_data[:, 1], c=domain_list)
         plt.legend(handles=scatter.legend_elements()[0], labels=classes)
-        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}', f'features{idx}_epoch{epoch}.png')
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}', f'training-features{idx}_epoch{epoch}.png')
         plt.savefig(save_path, dpi=200)
         plt.close()
         plt.cla()
         plt.clf()
-        # import pdb;pdb.set_trace()
-        cluster_mean = torch.stack(cluster_mean)
-        cluster_std = torch.stack(cluster_std)
-        cluster_samples = torch.stack((cluster_mean, cluster_std), axis=1)
-        self.const_mean = torch.mean(cluster_mean, axis=0)
-        self.const_std = torch.mean(cluster_std, axis=0)
+        
+        classes = ['c1', 'c2', 'c3']
+        scatter = plt.scatter(plot_data[:, 0], plot_data[:, 1], c=labels)
+        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
+        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}', f'cluster{idx}_epoch{epoch}.png')
+        plt.savefig(save_path, dpi=200)
+        plt.close()
+        plt.cla()
+        plt.clf()
         
         if args.wandb:
             args.tracker.log({
-                f'Mean_domain{domain_id}_{idx}': torch.mean(self.const_mean).item()
+                f'Mean_domain_{idx}': torch.mean(self.const_mean).item()
             }, step=epoch)
             
             args.tracker.log({
-                f'Std_domain{domain_id}_{idx}': torch.mean(self.const_std).item()
+                f'Std_domain_{idx}': torch.mean(self.const_cov).item()
             }, step=epoch)
     
     def plot_style(self, args, idx, epoch):
@@ -356,28 +381,6 @@ class ConstantStyle(nn.Module):
             classes = ['photo', 'art', 'sketch', 'cartoon']
         elif args.test_domains == 's':
             classes = ['photo', 'art', 'cartoon', 'sketch']
-        
-        #kde plot
-        kde_data = np.hstack((transformed_mean, transformed_std))
-        kde = KernelDensity(bandwidth=0.5, kernel='gaussian')
-        kde.fit(kde_data)
-        
-        # Generate grid points for visualization
-        x_min, x_max = kde_data[:, 0].min() - 1, kde_data[:, 0].max() + 1
-        y_min, y_max = kde_data[:, 1].min() - 1, kde_data[:, 1].max() + 1
-        xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
-        grid_points = np.c_[xx.ravel(), yy.ravel()]
-        z = np.exp(kde.score_samples(grid_points))
-        z = z.reshape(xx.shape)
-        plt.contourf(xx, yy, z, cmap=plt.cm.viridis)
-        plt.scatter(kde_data[:, 0], kde_data[:, 1], s=5, color='black', alpha=0.5, c=domain_list)
-        plt.legend(handles=scatter.legend_elements()[0], labels=classes)
-        plt.colorbar(label='Density')
-        save_path = os.path.join(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}', f'style{idx}_kde_epoch{epoch}.png')
-        plt.savefig(save_path, dpi=200)
-        plt.close()
-        plt.cla()
-        plt.clf()
     
         scatter = plt.scatter(transformed_mean[:, 0], transformed_std[:, 0], c=domain_list)
         plt.legend(handles=scatter.legend_elements()[0], labels=classes)
@@ -393,33 +396,40 @@ class ConstantStyle(nn.Module):
         sig = (var + self.eps).sqrt()
         mu, sig = mu.detach(), sig.detach()
         x_normed = (x-mu) / sig
-        const_mean = torch.reshape(self.const_mean, (1, self.const_mean.shape[0], 1, 1))
-        const_std = torch.reshape(self.const_std, (1, self.const_std.shape[0], 1, 1))
-    
+        # print(f'Before applying ConstStyle: Mean: {torch.mean(mu.squeeze(), dim=(0,1))} | Std: {torch.mean(sig.squeeze(), dim=(0,1))}')
+        if not self.training:
+            const_value = torch.reshape(self.const_mean, (2, -1))
+            const_mean = const_value[0].float()
+            const_std = const_value[1].float()
+            const_mean = torch.reshape(const_mean, (1, const_mean.shape[0], 1, 1)).to('cuda')
+            const_std = torch.reshape(const_std, (1, const_std.shape[0], 1, 1)).to('cuda')
+        else:
+            generator = torch.distributions.MultivariateNormal(loc=self.const_mean, covariance_matrix = self.const_cov)
+            style_mean = []
+            style_std = []
+            for i in range(len(x_normed)):
+                style = generator.sample()
+                style = torch.reshape(style, (2, -1))
+                style_mean.append(style[0])
+                style_std.append(style[1])
+            
+            const_mean = torch.vstack(style_mean).float()
+            const_std = torch.vstack(style_std).float()
+            
+            const_mean = torch.reshape(const_mean, (const_mean.shape[0], const_mean.shape[1], 1, 1)).to('cuda')
+            const_std = torch.reshape(const_std, (const_std.shape[0], const_std.shape[1], 1, 1)).to('cuda')
+            
         out = x_normed * const_std + const_mean
         
-        # if sampling:
-        #     generator = torch.distributions.MultivariateNormal(loc=self.const_mean, covariance_matrix = self.cov_mat)
-        #     #create generator to get value from normal distribution 
-        #     # gaussian_generator = torch.distributions.Normal(loc=self.const_mean, scale=self.const_std)
-        #     sample_list = []
-        #     gen_mean, gen_var = [], []
-        #     import pdb;pdb.set_trace()
-        #     for i in range(x.shape[0]):
-        #         mean, var = generator.sample()
-        #         gen_mean.append(mean)
-        #         gen_var.append(var)
-        #         sample = torch.reshape(sample, (1, sample.shape[0], 1, 1))
-        #     gen_mean = torch.vstack(gen_mean)
-        #     gen_var = torch.vstack(gen_var)
-        #     out = x_normed * gen_var + gen_mean
-            # sample_list.append(sample)
-            # sample_list = torch.vstack(sample_list)
-        # if sampling:
-        #     out = x_normed * aug_sig + aug_mu
+        # mu = out.mean(dim=[2, 3], keepdim=True)
+        # var = out.var(dim=[2, 3], keepdim=True)
+        # sig = (var + self.eps).sqrt()
+        # mu, sig = mu.detach(), sig.detach()
+        # print(f'After applying ConstStyle: Mean: {torch.mean(mu.squeeze(), dim=(0,1))} | Std: {torch.mean(sig.squeeze(), dim=(0,1))}')
         
         if store_style:
-            self.scaled_feats.extend([i.detach().cpu().numpy() for i in out])
+            feats = [i.detach().cpu().numpy() for i in out]
+            self.scaled_feats.extend(feats)
 
         return out
     

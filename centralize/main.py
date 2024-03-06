@@ -8,6 +8,7 @@ import argparse
 import os
 import csv
 import wandb
+import tqdm
 
 from torch.utils.data import Subset, DataLoader, ConcatDataset, random_split
 from torchvision.datasets import ImageFolder
@@ -33,9 +34,8 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
     model.to(device)
     stored_label = []
     max_accuracy = 0.0
-    style_idx = args.style_idx
 
-    for epoch in range(args.num_epoch):
+    for epoch in tqdm.tqdm(range(args.num_epoch)):
         if args.method == 'conststyle' or args.method == 'conststyle-bn':
             for conststyle in model.conststyle:
                 conststyle.clear_memory()
@@ -51,16 +51,17 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
         model.train()
         running_loss = 0.0
 
-        for inputs, labels in train_loader:
-            inputs, labels, domains = inputs[0].to(device), inputs[1].to(device), labels
+        print(f'Training w epoch {epoch+1}')
+        for inputs, domains_val in tqdm.tqdm(train_loader):
+            inputs, labels, domains = inputs[0].to(device), inputs[1].to(device), domains_val
             optimizer.zero_grad()
 
-            stored_label.extend(labels.detach().cpu())
+            stored_label.extend(labels.detach().cpu().numpy())
             if args.method == 'conststyle' or args.method == 'conststyle-bn':
                 if epoch == 0:
-                    outputs = model(inputs, domains, store_style=True)
+                    outputs = model(inputs, domains, store_feats=True)
                 else:
-                    outputs = model(inputs, domains, const_style=True, store_style=True)
+                    outputs = model(inputs, domains, const_style=True, store_feats=True)
             else:
                 outputs = model(inputs, domains=domains, store_feats=True)
 
@@ -71,29 +72,30 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             running_loss += loss.item()
             
             #training more using sampling features
-            if args.method == 'conststyle' or args.method == 'conststyle-bn':
-                if epoch > 0:
-                    optimizer.zero_grad()
-                    outputs = model(inputs, domains, const_style=True, store_style=True, sampling=True)
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
+            # if args.method == 'conststyle' or args.method == 'conststyle-bn':
+            #     if epoch > 0:
+            #         optimizer.zero_grad()
+            #         outputs = model(inputs, domains, const_style=True, store_style=True, sampling=True)
+            #         loss = criterion(outputs, labels)
+            #         loss.backward()
+            #         optimizer.step()
 
-            running_loss += loss.item()
+            # running_loss += loss.item()
 
         if args.method == 'conststyle' or args.method == 'conststyle-bn':
             if epoch % args.update_interval == 0:
+                print('Update cluster')
                 for idx, conststyle in enumerate(model.conststyle):
-                    conststyle.cal_mean_std(idx, style_idx, args, epoch)
+                        conststyle.cal_mean_std(idx, args, epoch)
 
         print(f"Epoch {epoch+1}/{args.num_epoch}, Train Loss: {running_loss/len(train_loader)}")
 
         model.eval()
         correct_predictions = 0
         total_samples = 0
-
         with torch.no_grad():
             print(f'Test in-domain data')
+            count = 0
             for inputs, labels in test_in_domain_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
 
@@ -123,6 +125,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
             total_samples = 0
             
             print(f'Test out-of-domain data')
+            count = 0
             for inputs, labels in test_out_domain_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
 
@@ -130,7 +133,7 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                 if args.method == 'conststyle' or args.method == 'conststyle-bn':
                     if epoch > 0:
                         domains = torch.full((len(labels), 1), 4)
-                        outputs = model(inputs, domains, const_style=True, store_style=True)
+                        outputs = model(inputs, domains, const_style=True, store_feats=True)
                     else:
                         outputs = model(inputs, domains)
                 else:
@@ -153,8 +156,8 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
                     'OD Accuracy': test_accuracy
                 }, step=epoch)
             
-        if epoch > 0:
-            model.plot_style(args, epoch)
+        # if epoch > 0:
+        #     model.plot_style(args, epoch)
 
     print(f"Training finished | Max Accuracy: {max_accuracy}")
     if args.wandb:
@@ -169,18 +172,21 @@ def train(args, model, train_loader, test_in_domain_loader, test_out_domain_load
         csv_writer.writerow(['Acc', max_accuracy])
 
 def main(args):
+    print('Create folder to store results...')
     save_path = f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     
     if os.path.exists(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}/acc.csv'):
         os.remove(f'results/{args.dataset}/{args.method}_{args.train_domains}_{args.test_domains}_{args.option}/acc.csv')
-    
+    print('Created')
+        
     train_dataset = []
     test_dataset = []
     len_dataset = []
     idx = 1
     
+    print(f'Setting up data for dataset {args.dataset} with test domain {args.test_domains}...')
     if args.dataset == 'pacs':
         dataset_list = prepare_pacs(args)
         if 'p' in args.train_domains:
@@ -221,13 +227,13 @@ def main(args):
             idx += 1
         
         if 'p' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8)
         elif 'a' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8)
         elif 'c' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8)
         elif 's' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8)
         
     elif args.dataset == 'officehome':
         dataset_list = prepare_officehome(args)
@@ -270,20 +276,20 @@ def main(args):
             idx += 1
         
         if 'a' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[0], batch_size=64, shuffle=False, num_workers=8)
         elif 'c' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[1], batch_size=64, shuffle=False, num_workers=8)
         elif 'p' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[2], batch_size=64, shuffle=False, num_workers=8)
         elif 'r' == args.test_domains:
-            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=32, shuffle=False, num_workers=8)
+            test_out_domain_loader = DataLoader(dataset_list[3], batch_size=64, shuffle=False, num_workers=8)
     
         
     concated_train_dataset = ConcatDataset(train_dataset)
     concated_test_dataset = ConcatDataset(test_dataset)
     concated_train_domain = torch.vstack(len_dataset)
-    train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=32, shuffle=True, num_workers=8)
-    test_in_domain_loader = DataLoader(concated_test_dataset, batch_size=32, shuffle=False, num_workers=8)
+    train_loader = DataLoader(list(zip(concated_train_dataset, concated_train_domain)), batch_size=64, shuffle=True, num_workers=8)
+    test_in_domain_loader = DataLoader(concated_test_dataset, batch_size=64, shuffle=False, num_workers=8)
 
     if args.method == 'conststyle':
         model = ConstStyleModel()
@@ -301,14 +307,11 @@ def main(args):
     if args.dataset == 'pacs':
         model.model.fc = torch.nn.Linear(model.model.fc.in_features, 7)
     elif args.dataset == 'officehome':
-        model.model.fc = torch.nn.Sequential(
-            torch.nn.Linear(model.model.fc.in_features, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 65)
-            ) 
+        model.model.fc = torch.nn.Linear(model.model.fc.in_features, 65)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.model.parameters(), lr=1e-4, weight_decay=1e-5)
+    print(f'Setup done')
     train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer)
 
 if __name__ == "__main__":
