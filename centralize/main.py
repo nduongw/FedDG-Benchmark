@@ -21,6 +21,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def set_seed(seed):
     np.random.seed(seed)
+    np.random.RandomState.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)

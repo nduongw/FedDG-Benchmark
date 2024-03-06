@@ -115,8 +115,8 @@ class MixStyle(nn.Module):
         var = scaled_feats.var(axis=(2, 3), keepdims=True)
         var = np.sqrt(var)
 
-        tsne3 = TSNE(n_components=1, random_state=42)
-        tsne4 = TSNE(n_components=1, random_state=42)
+        tsne3 = TSNE(n_components=1, random_state=args.seed)
+        tsne4 = TSNE(n_components=1, random_state=args.seed)
         
         transformed_mean = tsne3.fit_transform(np.squeeze(mu))
         transformed_std = tsne4.fit_transform(np.squeeze(var))
@@ -199,8 +199,8 @@ class DistributionUncertainty(nn.Module):
         var = scaled_feats.var(axis=(2, 3), keepdims=True)
         var = np.sqrt(var)
 
-        tsne3 = TSNE(n_components=1, random_state=42)
-        tsne4 = TSNE(n_components=1, random_state=42)
+        tsne3 = TSNE(n_components=1, random_state=args.seed)
+        tsne4 = TSNE(n_components=1, random_state=args.seed)
         
         transformed_mean = tsne3.fit_transform(np.squeeze(mu))
         transformed_std = tsne4.fit_transform(np.squeeze(var))
@@ -330,7 +330,7 @@ class ConstantStyle(nn.Module):
         elif args.test_domains == 's':
             classes = ['photo', 'art', 'cartoon']
         
-        tsne = TSNE(n_components=2, random_state=42)
+        tsne = TSNE(n_components=2, random_state=args.seed)
         plot_data = tsne.fit_transform(reshaped_data)
         
         scatter = plt.scatter(plot_data[:, 0], plot_data[:, 1], c=domain_list)
@@ -367,10 +367,10 @@ class ConstantStyle(nn.Module):
         var = scaled_feats.var(axis=(2, 3), keepdims=True)
         var = np.sqrt(var)
 
-        tsne3 = TSNE(n_components=1, random_state=42)
+        tsne3 = TSNE(n_components=1, random_state=args.seed)
         transformed_mean = tsne3.fit_transform(np.squeeze(mu))
 
-        tsne4 = TSNE(n_components=1, random_state=42)
+        tsne4 = TSNE(n_components=1, random_state=args.seed)
         transformed_std = tsne4.fit_transform(np.squeeze(var))
         
         if args.test_domains == 'p':
@@ -526,8 +526,8 @@ class CorrelatedDistributionUncertainty(nn.Module):
         var = scaled_feats.var(axis=(2, 3), keepdims=True)
         var = np.sqrt(var)
 
-        tsne3 = TSNE(n_components=1, random_state=42)
-        tsne4 = TSNE(n_components=1, random_state=42)
+        tsne3 = TSNE(n_components=1, random_state=args.seed)
+        tsne4 = TSNE(n_components=1, random_state=args.seed)
         
         transformed_mean = tsne3.fit_transform(np.squeeze(mu))
         transformed_std = tsne4.fit_transform(np.squeeze(var))
