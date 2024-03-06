@@ -20,21 +20,49 @@ from model import *
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def set_seed(seed):
-    np.random.seed(seed)
-    np.random.RandomState(seed)
     random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
-    # Set a fixed value for the hash seed
-    os.environ["PYTHONHASHSEED"] = str(seed)
 
 def seed_worker(worker_id):
     worker_seed = 42
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--train_domains', type=str)
+parser.add_argument('--test_domains', type=str)
+parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle', 'baseline', 'conststyle-bn'])
+parser.add_argument('--dataset', type=str, choices=['pacs', 'officehome'])
+parser.add_argument('--num_epoch', type=int, default=50)
+parser.add_argument('--style_idx', type=int, default=None)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--wandb', type=int, default=1)
+parser.add_argument('--update_interval', type=int, default=10)
+parser.add_argument('--option', type=str, default='')
+args = parser.parse_args()
+
+gr_name = 'PACS' if args.dataset == 'pacs' else 'OfficeHome'
+if args.wandb:
+    job_type = f'{args.method}_{args.option}'
+    tracker = wandb.init(
+        project = 'CentralizedDG',
+        entity = 'aiotlab',
+        config = args,
+        group = f'{gr_name}',
+        name = f'train={args.train_domains}_test={args.test_domains}'+
+            f'_method={args.method}'+
+            f'_style={args.style_idx}',
+        job_type = job_type
+    )
+    args.tracker = tracker
+
+set_seed(args.seed)
+    
 
 def train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer):
     model.to(device)
@@ -321,33 +349,4 @@ def main(args):
     train(args, model, train_loader, test_in_domain_loader, test_out_domain_loader, criterion, optimizer)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--train_domains', type=str)
-    parser.add_argument('--test_domains', type=str)
-    parser.add_argument('--method', type=str, choices=['csu', 'dsu', 'mixstyle', 'conststyle', 'baseline', 'conststyle-bn'])
-    parser.add_argument('--dataset', type=str, choices=['pacs', 'officehome'])
-    parser.add_argument('--num_epoch', type=int, default=50)
-    parser.add_argument('--style_idx', type=int, default=None)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--wandb', type=int, default=1)
-    parser.add_argument('--update_interval', type=int, default=10)
-    parser.add_argument('--option', type=str, default='')
-    args = parser.parse_args()
-    
-    gr_name = 'PACS' if args.dataset == 'pacs' else 'OfficeHome'
-    if args.wandb:
-        job_type = f'{args.method}_{args.option}'
-        tracker = wandb.init(
-            project = 'CentralizedDG',
-            entity = 'aiotlab',
-            config = args,
-            group = f'{gr_name}',
-            name = f'train={args.train_domains}_test={args.test_domains}'+
-                f'_method={args.method}'+
-                f'_style={args.style_idx}',
-            job_type = job_type
-        )
-        args.tracker = tracker
-    
-    set_seed(args.seed)
     main(args)
